@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Alumère — Progetti</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body class="archive-body">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">∑</span>
+      <span class="name">Alum<span class="thin">ère</span></span>
+      <span class="tag">draft</span>
+    </div>
+    <div class="toolbar">
+      <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
+      <button id="uploadBtn" class="btn primary"><span class="ic">⬆</span> Carica .zip</button>
+      <span id="archStatus" class="status idle">&nbsp;</span>
+    </div>
+  </header>
+
+  <main class="archive">
+    <div class="archive-head">
+      <h1>Progetti</h1>
+      <p class="sub">Libreria condivisa — i progetti restano sul server, disponibili a tutti.</p>
+    </div>
+    <div id="grid" class="proj-grid"></div>
+    <div id="empty" class="proj-empty hidden">
+      <p>Nessun progetto ancora.</p>
+      <p class="muted">Carica un archivio <b>.zip</b> di un progetto LaTeX per iniziare.</p>
+    </div>
+  </main>
+
+  <script src="archive.js"></script>
+</body>
+</html>

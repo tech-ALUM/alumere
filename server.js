@@ -1,0 +1,258 @@
+// Alumère — backend for the draft application.
+//
+// Responsibilities:
+//   1. Serve the static front-end (public/): an archive page + the editor.
+//   2. A filesystem-backed project store (shared library — no accounts yet).
+//      Each project = a folder under PROJECTS_DIR:  <id>/meta.json + <id>/files/.
+//   3. POST /api/compile : run a real LaTeX compile (latexmk) and return PDF+log.
+//
+// Persistence is deliberately simple (files on disk) so a trusted small group can
+// self-host on one VPS. Mount a Docker volume at PROJECTS_DIR to keep projects.
+
+import express from "express";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, cp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
+import AdmZip from "adm-zip";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Where persistent projects live. Mount a Docker volume here to keep them.
+const PROJECTS_DIR = process.env.PROJECTS_DIR || path.join(__dirname, "data", "projects");
+const SEED_DIR = path.join(__dirname, "seed");
+
+// Projects can carry base64 images / zips, so allow a generous body.
+app.use(express.json({ limit: "60mb" }));
+app.use(express.static(path.join(__dirname, "public")));
+
+const ENGINE_FLAG = { pdflatex: "-pdf", xelatex: "-xelatex", lualatex: "-lualatex" };
+const COMPILE_TIMEOUT_MS = 60_000;
+
+// ---------- helpers ----------
+function safeRelPath(p) {
+  const norm = path.normalize(p).replace(/^(\.\.(\/|\\|$))+/, "");
+  if (path.isAbsolute(norm) || norm.startsWith("..")) return null;
+  return norm;
+}
+const TEXT_RE = /\.(tex|bib|cls|sty|txt|md|markdown|csv|tsv|json|ya?ml|cfg|bbl|aux|toc)$/i;
+const isText = (name) => TEXT_RE.test(name);
+const validId = (id) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
+const projectDir = (id) => path.join(PROJECTS_DIR, id);
+const filesDir = (id) => path.join(projectDir(id), "files");
+const uid = () => "n-" + crypto.randomBytes(5).toString("hex");
+
+async function readMeta(id) {
+  try { return JSON.parse(await readFile(path.join(projectDir(id), "meta.json"), "utf8")); }
+  catch { return null; }
+}
+async function writeMeta(id, meta) {
+  await writeFile(path.join(projectDir(id), "meta.json"), JSON.stringify(meta, null, 2), "utf8");
+}
+
+// Build the editor's nested tree model from a project's files/ directory.
+async function buildTree(dir) {
+  let entries = [];
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return []; }
+  entries.sort((a, b) =>
+    a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : (a.isDirectory() ? -1 : 1));
+  const out = [];
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      out.push({ id: uid(), type: "folder", name: e.name, open: true, children: await buildTree(full) });
+    } else {
+      const node = { id: uid(), type: "file", name: e.name };
+      if (isText(e.name)) node.content = await readFile(full, "utf8");
+      else { node.content = (await readFile(full)).toString("base64"); node.encoding = "base64"; }
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+async function countFiles(dir) {
+  let n = 0, entries = [];
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    n += e.isDirectory() ? await countFiles(path.join(dir, e.name)) : 1;
+  }
+  return n;
+}
+
+// Replace a project's files/ with the supplied flat list (handles renames/deletes).
+async function writeFiles(id, files) {
+  const root = filesDir(id);
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true });
+  for (const f of files || []) {
+    const rel = safeRelPath(f.path || "");
+    if (!rel) continue;
+    const dest = path.join(root, rel);
+    await mkdir(path.dirname(dest), { recursive: true });
+    if (f.encoding === "base64") await writeFile(dest, Buffer.from(f.content || "", "base64"));
+    else await writeFile(dest, f.content ?? "", "utf8");
+  }
+}
+
+// ---------- project endpoints ----------
+app.get("/api/projects", async (_req, res) => {
+  try {
+    await mkdir(PROJECTS_DIR, { recursive: true });
+    const dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory());
+    const list = [];
+    for (const d of dirs) {
+      const meta = await readMeta(d.name);
+      if (meta) list.push({ ...meta, fileCount: await countFiles(filesDir(d.name)) });
+    }
+    list.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    res.json({ ok: true, projects: list });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get("/api/projects/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  try {
+    const root = await buildTree(filesDir(id));
+    res.json({ ok: true, project: { id, name: meta.name, root } });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.put("/api/projects/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  const { files, name } = req.body || {};
+  try {
+    await writeFiles(id, files);
+    meta.updatedAt = new Date().toISOString();
+    if (name) meta.name = name;
+    await writeMeta(id, meta);
+    res.json({ ok: true, updatedAt: meta.updatedAt });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.delete("/api/projects/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  try { await rm(projectDir(id), { recursive: true, force: true }); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Upload a .zip (base64 in JSON) -> new project.
+app.post("/api/projects/upload", async (req, res) => {
+  const { name, zip } = req.body || {};
+  if (!zip) return res.status(400).json({ ok: false, error: "no zip data" });
+  const id = crypto.randomUUID();
+  try {
+    const entries = new AdmZip(Buffer.from(zip, "base64")).getEntries();
+    // Strip a single common top-level folder (typical of exported zips).
+    const tops = new Set();
+    for (const en of entries) {
+      const p = en.entryName.replace(/\\/g, "/");
+      if (!p || p.startsWith("__MACOSX")) continue;
+      tops.add(p.split("/")[0]);
+    }
+    const strip = tops.size === 1 ? [...tops][0] + "/" : "";
+
+    const root = filesDir(id);
+    await mkdir(root, { recursive: true });
+    let wrote = 0;
+    for (const en of entries) {
+      let p = en.entryName.replace(/\\/g, "/");
+      if (en.isDirectory || p.startsWith("__MACOSX") || p.endsWith(".DS_Store")) continue;
+      if (strip && p.startsWith(strip)) p = p.slice(strip.length);
+      const rel = safeRelPath(p);
+      if (!rel) continue;
+      const dest = path.join(root, rel);
+      await mkdir(path.dirname(dest), { recursive: true });
+      await writeFile(dest, en.getData());
+      wrote++;
+    }
+    if (!wrote) { await rm(projectDir(id), { recursive: true, force: true }); return res.status(400).json({ ok: false, error: "empty or invalid zip" }); }
+
+    const now = new Date().toISOString();
+    const meta = { id, name: (name || "Untitled project").replace(/\.zip$/i, "").slice(0, 120), createdAt: now, updatedAt: now };
+    await writeMeta(id, meta);
+    res.json({ ok: true, id, name: meta.name });
+  } catch (e) {
+    await rm(projectDir(id), { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---------- compile (compiles the files sent inline; stateless temp dir) ----------
+function runLatexmk(cwd, mainFile, engineFlag) {
+  return new Promise((resolve) => {
+    const args = [engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-no-shell-escape", mainFile];
+    const child = spawn("latexmk", args, { cwd });
+    let log = "";
+    const onData = (d) => (log += d.toString());
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    const killer = setTimeout(() => { log += "\n[alumere] Compilation timed out and was stopped.\n"; child.kill("SIGKILL"); }, COMPILE_TIMEOUT_MS);
+    child.on("error", (err) => { clearTimeout(killer); resolve({ code: -1, log: `[alumere] Failed to launch latexmk: ${err.message}\n` }); });
+    child.on("close", (code) => { clearTimeout(killer); resolve({ code, log }); });
+  });
+}
+
+app.post("/api/compile", async (req, res) => {
+  const { files, main = "main.tex", engine = "xelatex" } = req.body || {};
+  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ ok: false, log: "No files were sent to compile." });
+  const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.xelatex;
+  let dir;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), "alumere-"));
+    for (const f of files) {
+      const rel = safeRelPath(f.path || "");
+      if (!rel) continue;
+      const dest = path.join(dir, rel);
+      await mkdir(path.dirname(dest), { recursive: true });
+      if (f.encoding === "base64") await writeFile(dest, Buffer.from(f.content || "", "base64"));
+      else await writeFile(dest, f.content ?? "", "utf8");
+    }
+    const mainRel = safeRelPath(main) || "main.tex";
+    const { code, log } = await runLatexmk(dir, mainRel, engineFlag);
+    const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
+    if (existsSync(pdfPath)) {
+      const pdf = await readFile(pdfPath);
+      return res.json({ ok: true, log, pdf: pdf.toString("base64") });
+    }
+    return res.json({ ok: false, log: log || "No PDF was produced. Check the log for LaTeX errors.", code });
+  } catch (err) {
+    return res.status(500).json({ ok: false, log: `Server error: ${err.message}` });
+  } finally {
+    if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+app.get("/api/health", (_req, res) => res.json({ ok: true, engines: Object.keys(ENGINE_FLAG) }));
+
+// ---------- seed a sample project on first run ----------
+async function seedSample() {
+  await mkdir(PROJECTS_DIR, { recursive: true });
+  const dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory());
+  if (dirs.length > 0 || !existsSync(SEED_DIR)) return;
+  const id = crypto.randomUUID();
+  await mkdir(filesDir(id), { recursive: true });
+  await cp(SEED_DIR, filesDir(id), { recursive: true });
+  const now = new Date().toISOString();
+  await writeMeta(id, { id, name: "Sample paper", createdAt: now, updatedAt: now });
+  console.log("[alumere] seeded sample project", id);
+}
+
+app.listen(PORT, async () => {
+  await seedSample().catch((e) => console.warn("[alumere] seed failed:", e.message));
+  console.log(`Alumère draft running →  http://localhost:${PORT}`);
+});

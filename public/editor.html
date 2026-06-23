@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Editor — Alumère</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a class="backlink" href="index.html" title="Torna ai progetti">←</a>
+      <span class="logo">∑</span>
+      <span class="name">Alum<span class="thin">ère</span></span>
+      <span class="projname" id="projName">Project</span>
+    </div>
+    <div class="toolbar">
+      <label class="engine">
+        Engine
+        <select id="engine">
+          <option value="xelatex" selected>XeLaTeX</option>
+          <option value="pdflatex">pdfLaTeX</option>
+          <option value="lualatex">LuaLaTeX</option>
+        </select>
+      </label>
+      <label class="engine">
+        Theme
+        <select id="editorTheme" title="Editor colour palette"></select>
+      </label>
+      <button id="save" class="btn" title="Salva sul server">Save</button>
+      <button id="recompile" class="btn primary" title="Recompile (Ctrl/Cmd+S salva e compila)">
+        <span class="ic">▶</span> Recompile
+      </button>
+      <button id="download" class="btn" title="Scarica il PDF compilato">Download PDF</button>
+      <span id="status" class="status idle">Ready</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="pane files" id="filesPane">
+      <div class="pane-head">
+        <span>Project</span>
+        <div class="pane-actions">
+          <button id="newFile" class="mini" title="New file">＋ file</button>
+          <button id="newFolder" class="mini" title="New folder">＋ folder</button>
+        </div>
+      </div>
+      <ul id="tree" class="tree"></ul>
+      <div class="files-hint">Click a file to edit · hover a row for rename / delete</div>
+    </section>
+
+    <div class="splitter" data-target="filesPane"></div>
+
+    <section class="pane editor">
+      <div class="pane-head">
+        <span id="openPath">main.tex</span>
+        <span class="muted small" id="dirtyDot"></span>
+      </div>
+      <div id="editor" class="editor-host"></div>
+    </section>
+
+    <div class="splitter" data-target="editorPane"></div>
+
+    <section class="pane preview" id="previewPane">
+      <div class="pane-head">
+        <span>Preview</span>
+        <div class="pane-actions">
+          <button id="tabPdf" class="tabbtn active">PDF</button>
+          <button id="tabLog" class="tabbtn">Log</button>
+        </div>
+      </div>
+      <div class="preview-body">
+        <iframe id="pdf" class="pdf" title="Compiled PDF"></iframe>
+        <pre id="log" class="log hidden"></pre>
+        <div id="previewEmpty" class="preview-empty">Press <b>Recompile</b> to build the PDF.</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="vendor/codemirror.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

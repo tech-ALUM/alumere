@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: alumere
+    ports:
+      - "3000:3000"
+    environment:
+      - PROJECTS_DIR=/app/data/projects
+    volumes:
+      # Projects persist here across restarts/rebuilds.
+      - alumere-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  alumere-data:
