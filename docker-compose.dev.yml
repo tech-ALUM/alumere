@@ -1,0 +1,33 @@
+# Alumère — DEV override.
+# Hot-reload: il codice locale è montato nel container e `node --watch`
+# riavvia il server a ogni salvataggio. Niente rebuild per le modifiche al codice.
+#
+# Uso:
+#   docker compose -f docker-compose.dev.yml up --build      (prima volta)
+#   docker compose -f docker-compose.dev.yml up              (volte successive)
+#
+# NB: una modifica alle DIPENDENZE (package.json) richiede comunque un --build.
+
+services:
+  app:
+    build: .
+    container_name: alumere-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - PROJECTS_DIR=/app/data/projects
+    volumes:
+      # 1) Monta il codice del progetto -> le modifiche si vedono subito.
+      - .:/app
+      # 2) Volume anonimo che "copre" node_modules: tiene quello Linux
+      #    del container e impedisce al node_modules del Mac di sovrascriverlo.
+      - /app/node_modules
+      # 3) I progetti restano persistenti come in produzione.
+      - alumere-data:/app/data
+    # Hot-reload nativo di Node (usa lo script "dev" presente in package.json).
+    command: ["node", "--watch", "server.js"]
+    restart: unless-stopped
+
+volumes:
+  alumere-data:

@@ -1,0 +1,39 @@
+# ---- Dipendenze (ricostruibili da package-lock.json con `npm install`) ----
+node_modules/
+
+# ---- Dati runtime: progetti caricati dagli utenti, NON vanno nel repo ----
+data/
+
+# ---- Output di build di CodeMirror ----
+# NB: public/vendor/codemirror.js NON è ignorato: è committato apposta così
+# l'app gira senza step di build. La SORGENTE è build/cm-entry.mjs (tracciata).
+# Rigenera il bundle con:
+#   npx esbuild build/cm-entry.mjs --bundle --format=iife \
+#     --outfile=public/vendor/codemirror.js --minify
+
+# ---- File di sistema macOS ----
+.DS_Store
+**/.DS_Store
+
+# ---- Log e cache ----
+*.log
+npm-debug.log*
+.npm/
+
+# ---- Variabili d'ambiente (se in futuro aggiungete segreti/credenziali) ----
+.env
+.env.*
+!.env.example
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp
+
+# ---- Artefatti LaTeX, se mai compilate fuori dal container ----
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
