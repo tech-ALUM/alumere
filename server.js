@@ -12,7 +12,7 @@
 import express from "express";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, cp } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -27,9 +27,33 @@ const PORT = process.env.PORT || 3000;
 const PROJECTS_DIR = process.env.PROJECTS_DIR || path.join(__dirname, "data", "projects");
 const SEED_DIR = path.join(__dirname, "seed");
 
+// ---------- identity / session (lightweight: signed cookie, no real auth yet) ----------
+// Phase 1: users type their name; a signed httpOnly cookie remembers them for a year
+// so they don't re-enter it on every visit. Phase 2 (later) swaps name entry for an
+// email login with company-domain validation — the cookie machinery stays the same.
+const COOKIE_NAME = "alm_session";
+const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;       // 1 year
+const COOKIE_SECURE = process.env.COOKIE_SECURE === "1";    // set to 1 when served over HTTPS
+
+// Persistent secret used to sign session cookies. Prefer SESSION_SECRET in prod;
+// otherwise keep one on disk inside PROJECTS_DIR (the persisted volume) so sessions
+// survive restarts. It's a dotfile and is never treated as a project.
+function resolveSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  const f = path.join(PROJECTS_DIR, ".session-secret");
+  try { if (existsSync(f)) return readFileSync(f, "utf8").trim(); } catch {}
+  const s = crypto.randomBytes(32).toString("hex");
+  try { mkdirSync(PROJECTS_DIR, { recursive: true }); writeFileSync(f, s, "utf8"); } catch {}
+  return s;
+}
+const SESSION_SECRET = resolveSessionSecret();
+
 // Projects can carry base64 images / zips, so allow a generous body.
 app.use(express.json({ limit: "60mb" }));
 app.use(express.static(path.join(__dirname, "public")));
+
+// Identify the caller from the signed session cookie (req.user is null if not signed in).
+app.use((req, _res, next) => { req.user = verifySession(parseCookies(req)[COOKIE_NAME]); next(); });
 
 const ENGINE_FLAG = { pdflatex: "-pdf", xelatex: "-xelatex", lualatex: "-lualatex" };
 const COMPILE_TIMEOUT_MS = 60_000;
@@ -53,6 +77,48 @@ async function readMeta(id) {
 }
 async function writeMeta(id, meta) {
   await writeFile(path.join(projectDir(id), "meta.json"), JSON.stringify(meta, null, 2), "utf8");
+}
+
+// ---------- session helpers ----------
+const SYSTEM_USER = { id: "system", name: "Alumère (system)" };
+const briefUser = (u) => (u ? { id: u.id, name: u.name } : null);
+
+// Build a user from a typed name. The id is derived from the lowercased full name,
+// so the same person gets the same id across devices (good enough for attribution now).
+function makeUser(firstName, lastName) {
+  const fn = String(firstName || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  const ln = String(lastName || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  if (!fn || !ln) return null;
+  const name = `${fn} ${ln}`;
+  const id = "u-" + crypto.createHash("sha256").update(name.toLowerCase()).digest("hex").slice(0, 12);
+  return { id, firstName: fn, lastName: ln, name };
+}
+function signSession(user) {
+  const payload = Buffer.from(JSON.stringify(user)).toString("base64url");
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+function verifySession(token) {
+  if (!token || typeof token !== "string" || !token.includes(".")) return null;
+  const [payload, sig] = token.split(".");
+  const expect = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  const a = Buffer.from(sig), b = Buffer.from(expect);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try { return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); } catch { return null; }
+}
+function parseCookies(req) {
+  const out = {}; const raw = req.headers.cookie;
+  if (!raw) return out;
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("="); if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+// Gate for mutating endpoints: never write to a project without a known author.
+function requireUser(req, res, next) {
+  if (!req.user) return res.status(401).json({ ok: false, error: "Devi identificarti per modificare.", needLogin: true });
+  next();
 }
 
 // Build the editor's nested tree model from a project's files/ directory.
@@ -102,6 +168,24 @@ async function writeFiles(id, files) {
   }
 }
 
+// ---------- session endpoints ----------
+app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
+
+app.post("/api/session", (req, res) => {
+  const { firstName, lastName } = req.body || {};
+  const user = makeUser(firstName, lastName);
+  if (!user) return res.status(400).json({ ok: false, error: "Inserisci nome e cognome." });
+  res.cookie(COOKIE_NAME, signSession(user), {
+    httpOnly: true, sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_MS, secure: COOKIE_SECURE,
+  });
+  res.json({ ok: true, user });
+});
+
+app.post("/api/session/logout", (_req, res) => {
+  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.json({ ok: true });
+});
+
 // ---------- project endpoints ----------
 app.get("/api/projects", async (_req, res) => {
   try {
@@ -128,7 +212,7 @@ app.get("/api/projects/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.put("/api/projects/:id", async (req, res) => {
+app.put("/api/projects/:id", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
   const meta = await readMeta(id);
@@ -137,13 +221,14 @@ app.put("/api/projects/:id", async (req, res) => {
   try {
     await writeFiles(id, files);
     meta.updatedAt = new Date().toISOString();
+    meta.updatedBy = briefUser(req.user);
     if (name) meta.name = name;
     await writeMeta(id, meta);
     res.json({ ok: true, updatedAt: meta.updatedAt });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.delete("/api/projects/:id", async (req, res) => {
+app.delete("/api/projects/:id", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
   try { await rm(projectDir(id), { recursive: true, force: true }); res.json({ ok: true }); }
@@ -151,7 +236,7 @@ app.delete("/api/projects/:id", async (req, res) => {
 });
 
 // Upload a .zip (base64 in JSON) -> new project.
-app.post("/api/projects/upload", async (req, res) => {
+app.post("/api/projects/upload", requireUser, async (req, res) => {
   const { name, zip } = req.body || {};
   if (!zip) return res.status(400).json({ ok: false, error: "no zip data" });
   const id = crypto.randomUUID();
@@ -183,7 +268,7 @@ app.post("/api/projects/upload", async (req, res) => {
     if (!wrote) { await rm(projectDir(id), { recursive: true, force: true }); return res.status(400).json({ ok: false, error: "empty or invalid zip" }); }
 
     const now = new Date().toISOString();
-    const meta = { id, name: (name || "Untitled project").replace(/\.zip$/i, "").slice(0, 120), createdAt: now, updatedAt: now };
+    const meta = { id, name: (name || "Untitled project").replace(/\.zip$/i, "").slice(0, 120), createdAt: now, updatedAt: now, createdBy: briefUser(req.user), updatedBy: briefUser(req.user) };
     await writeMeta(id, meta);
     res.json({ ok: true, id, name: meta.name });
   } catch (e) {
@@ -248,7 +333,7 @@ async function seedSample() {
   await mkdir(filesDir(id), { recursive: true });
   await cp(SEED_DIR, filesDir(id), { recursive: true });
   const now = new Date().toISOString();
-  await writeMeta(id, { id, name: "Sample paper", createdAt: now, updatedAt: now });
+  await writeMeta(id, { id, name: "Sample paper", createdAt: now, updatedAt: now, createdBy: briefUser(SYSTEM_USER), updatedBy: briefUser(SYSTEM_USER) });
   console.log("[alumere] seeded sample project", id);
 }
 

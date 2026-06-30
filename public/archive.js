@@ -34,7 +34,9 @@ function render(projects) {
         <button class="mini danger del">Elimina</button>
       </div>`;
     card.querySelector(".proj-name").textContent = p.name || "Untitled";
-    card.querySelector(".proj-meta").textContent = `${p.fileCount || 0} file · agg. ${fmtDate(p.updatedAt)}`;
+    const by = (p.updatedBy && p.updatedBy.name) || (p.createdBy && p.createdBy.name);
+    card.querySelector(".proj-meta").textContent =
+      `${p.fileCount || 0} file · agg. ${fmtDate(p.updatedAt)}` + (by ? ` · ${by}` : "");
     card.querySelector(".open").addEventListener("click", () => openProject(p.id));
     card.addEventListener("dblclick", () => openProject(p.id));
     card.querySelector(".del").addEventListener("click", async (e) => {
@@ -69,4 +71,5 @@ zipInput.addEventListener("change", async () => {
   finally { zipInput.value = ""; }
 });
 
-load();
+// Wait until the user is identified (auth.js) before loading the library.
+(window.Alumere ? window.Alumere.ready : Promise.resolve()).then(load);

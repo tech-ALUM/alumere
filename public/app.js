@@ -461,6 +461,8 @@ function errorScreen(msg) {
 }
 
 async function init() {
+  // Don't load/edit/save until the user is identified (auth.js sets the session cookie).
+  if (window.Alumere) await window.Alumere.ready;
   const ok = await loadProject();
   if (!ok) return;
   $("projName").textContent = project.name || "Project";
