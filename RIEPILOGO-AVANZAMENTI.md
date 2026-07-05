@@ -7,6 +7,61 @@
 
 ---
 
+## 2026-07-05 — M1 Step 1 (pipe collaborativo + persistenza): implementato ✅
+
+Primo step di M1: l'**editor vero** è ora collaborativo e i contenuti girano su Yjs,
+con **persistenza server-side** nei `files/`. Sparisce il PUT last-write-wins. Strategia
+concordata: fare prima il **pipe server (verificabile headless)**, poi il polish (Step 2).
+
+**Cosa c'è ora**
+- **Fonte di verità = un `Y.Doc` per progetto** (stanza = id progetto). `ydoc.getMap("files")`
+  mappa `path → Y.Text` (testo, editabile dal vivo) oppure `{ encoding:"base64", content }`
+  (binari, statici: round-trippati da persistenza e compile ma non collaborativi).
+- **Server (`server.js`, `attachCollab`)**: `onLoadDocument` semina il doc dai `files/` su disco
+  (nuovo helper `readFilesFlat`, inverso di `writeFiles`); `onStoreDocument` (debounce 2s)
+  materializza il doc nei `files/` e aggiorna `meta.json` (`updatedAt` + `updatedBy` letto da una
+  meta-map Yjs che il client setta sugli edit locali). Le stanze senza progetto (lo spike
+  `alumere-spike`) non hanno `meta` → saltate da entrambi gli hook, restano relay in memoria.
+- **Client (`public/app.js`, riscritto attorno a Yjs)**: l'editor si lega al `Y.Text` del file
+  attivo via `yCollab` (ricreo la `EditorView` al cambio file → binding pulito, nessun hazard di
+  compartment); albero = **proiezione dei path** della mappa (folder derivate dai segmenti);
+  create/rename/delete mutano la mappa → **live per tutti**; compile legge il contenuto corrente da
+  Yjs (stateless, invariato). Nuovo indicatore `#collabState` (connessione + n° presenti in
+  `editor.html`). Rimossi PUT/dirty locali.
+
+**Scelte (e perché)**
+- **Zero nuove dipendenze, zero rebuild di bundle/immagine**: `window.YCOLLAB` (dal bundle M0) espone
+  già `Y`/`HocuspocusProvider`/`yCollab`/`yUndoManagerKeymap`; il server usa deps già presenti. In dev
+  basta il riavvio di `node --watch` (server) + reload del browser (client statici).
+- **Niente `history()` nativa di CodeMirror** nel ramo collaborativo: l'undo è lo Yjs `UndoManager`
+  (via `yUndoManagerKeymap`), altrimenti confligge col CRDT. File binari aperti read-only.
+- **Guardia anti-wipe**: `onStoreDocument` non azzera i `files/` partendo da un doc vuoto (protegge da
+  un seed fallito) — cancellare *l'ultimo* file via collab semplicemente non persiste (edge case accettato).
+- **Folder**: derivate dai path (le folder vuote già oggi non sopravvivevano a un salvataggio); una
+  "＋ folder" crea una cartella **locale** finché non contiene un file (condivisione folder vuote → Step 2).
+- **Sicurezza invariata**: nessuna auth sul socket `/collab` (coerente con le letture già aperte) → gate dopo.
+
+**Verificato in questa sessione (in isolamento, senza toccare il container di produzione su :3000)**
+- Server fresco su :3100 + `PROJECTS_DIR` temporaneo. **Test headless a 2 client** (`@hocuspocus/provider`,
+  stessi pacchetti del browser): seed dai `files/` (anche annidati), sync live di un file, create e
+  rename propagati → **PASS** (8/8).
+- **Persistenza su disco**: edit/create/rename materializzati nei `files/`, `meta.updatedAt` aggiornato;
+  la stanza `alumere-spike` **non** crea cartelle (resta relay) → **PASS**.
+- **Browser** (preview dockerizzato): pagina carica **senza errori in console**, albero renderizzato da
+  Yjs (folder `sections/` annidata), editor legato al `Y.Text` con highlight, presenze `● N online`.
+  *(Il compile logga `latexmk ENOENT` solo perché il container di verifica è un `node` minimale senza
+  TeX; nell'immagine reale il PDF esce come prima — il codice di compile non è stato toccato.)*
+
+**Come vederlo girare**: il container `alumere` attualmente su :3000 ha il codice **vecchio** (la prod
+compose fa `COPY` a build-time). Per M1: fermarlo e usare la **dev compose** (bind-mount + `node --watch`,
+nessun rebuild necessario perché le dipendenze non cambiano) — poi aprire un progetto in **due schede**.
+
+**Prossimo passo → M1 Step 2**
+- Presenze ricche (chip con nomi/colori + "chi sta su quale file"), robustezza operazioni cartella e
+  condivisione folder vuote, riconnessione, pulizia UX (Save button, `#dirtyDot`). Poi M2 (history) e auth sul ws.
+
+---
+
 ## 2026-07-05 — M0 real-time (Yjs + Hocuspocus): implementato ✅
 
 Implementato e verificato lo **spike M0** di collaborazione real-time. È uno

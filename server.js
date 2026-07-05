@@ -168,6 +168,23 @@ async function writeFiles(id, files) {
   }
 }
 
+// Flat [{ path, content, encoding? }] walk of a project's files/ (text as utf8,
+// binary as base64) — the inverse of writeFiles. Used to seed the collab Y.Doc.
+async function readFilesFlat(dir, prefix = "") {
+  let entries = [];
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...await readFilesFlat(full, rel));
+    else if (isText(e.name)) out.push({ path: rel, content: await readFile(full, "utf8") });
+    else out.push({ path: rel, content: (await readFile(full)).toString("base64"), encoding: "base64" });
+  }
+  return out;
+}
+
 // ---------- session endpoints ----------
 app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
 
@@ -337,28 +354,87 @@ async function seedSample() {
   console.log("[alumere] seeded sample project", id);
 }
 
-// ---------- real-time collaboration (M0 spike) ----------
+// ---------- real-time collaboration (M0 spike + M1 per-project docs) ----------
 // A Hocuspocus CRDT server shares the SAME HTTP port: only WebSocket upgrades on
 // COLLAB_PATH are routed to it — every normal HTTP request is untouched, so the
 // compose file and the existing API don't change. It's loaded dynamically, so if
 // the collab deps aren't installed the editor + compile app still boot (collab
 // just stays off) instead of the whole process failing on a missing import.
-// Scope: this spike is an in-memory relay — no persistence into files/ and no auth
-// on the socket yet; those are M1 and the later auth gate on the roadmap.
+//
+// M1 — the room name IS the project id. A project's Y.Doc holds ydoc.getMap("files"):
+// path -> Y.Text (text, live-editable) or { encoding:"base64", content } (binary,
+// static). onLoadDocument seeds it from files/ on disk; onStoreDocument (debounced)
+// materializes it back, so compile and the REST API keep working unchanged. Rooms
+// with no matching project (e.g. the M0 spike "alumere-spike") have no meta, so they
+// are skipped by both hooks and stay a pure in-memory relay. Socket auth is still
+// deferred (same posture as the already-open GET reads) — that's a later gate.
 const COLLAB_PATH = process.env.COLLAB_PATH || "/collab";
+const COLLAB_FILES_KEY = "files";
+const COLLAB_META_KEY = "meta";
 
 async function attachCollab(httpServer) {
-  let serverMod, WebSocketServer;
+  let serverMod, WebSocketServer, Y;
   try {
     serverMod = await import("@hocuspocus/server");
     ({ WebSocketServer } = await import("ws"));
+    Y = await import("yjs");
   } catch (e) {
     console.warn(`[alumere] real-time collab disabled (deps missing): ${e.message}`);
     return;
   }
-  // v2 exports both the `Hocuspocus` class and a pre-made `Server` instance; use
-  // whichever is present. Either exposes handleConnection(ws, request).
-  const hocuspocus = serverMod.Hocuspocus ? new serverMod.Hocuspocus() : serverMod.Server;
+
+  // First client on a project → fill the empty doc from files/ on disk. Non-project
+  // rooms (no meta) are left untouched: the doc stays empty, a plain relay.
+  async function onLoadDocument({ documentName, document }) {
+    if (!validId(documentName)) return;
+    if (!(await readMeta(documentName))) return;
+    const filesMap = document.getMap(COLLAB_FILES_KEY);
+    if (filesMap.size > 0) return;                          // already loaded/populated
+    const files = await readFilesFlat(filesDir(documentName));
+    document.transact(() => {
+      for (const f of files) {
+        if (f.encoding === "base64") {
+          filesMap.set(f.path, { encoding: "base64", content: f.content });
+        } else {
+          const t = new Y.Text();
+          filesMap.set(f.path, t);                          // integrate, then fill
+          if (f.content) t.insert(0, f.content);
+        }
+      }
+    });
+    console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
+  }
+
+  // Debounced by Hocuspocus. The doc is the single source of truth, so we rewrite
+  // the whole files/ set (this is what makes renames/deletes stick). Guard: refuse
+  // to wipe a project down to zero files from an empty doc (protects against a seed
+  // hiccup) — deleting the last file via collab just won't persist, which is safe.
+  async function onStoreDocument({ documentName, document }) {
+    if (!validId(documentName)) return;
+    const meta = await readMeta(documentName);
+    if (!meta) return;
+    const filesMap = document.getMap(COLLAB_FILES_KEY);
+    const files = [];
+    for (const [p, v] of filesMap.entries()) {
+      if (v instanceof Y.Text) files.push({ path: p, content: v.toString() });
+      else if (v && v.encoding === "base64") files.push({ path: p, content: v.content, encoding: "base64" });
+    }
+    if (!files.length) { console.warn(`[alumere] collab store skipped for "${documentName}" (doc empty)`); return; }
+    await writeFiles(documentName, files);
+    meta.updatedAt = new Date().toISOString();
+    const ub = document.getMap(COLLAB_META_KEY).get("updatedBy");
+    if (ub && ub.id && ub.name) meta.updatedBy = { id: String(ub.id), name: String(ub.name) };
+    await writeMeta(documentName, meta);
+    console.log(`[alumere] collab stored "${documentName}" (${files.length} files)`);
+  }
+
+  const config = { debounce: 2000, maxDebounce: 10000, onLoadDocument, onStoreDocument };
+  // v2 exports the `Hocuspocus` class and a pre-made `Server` instance; use whichever
+  // is present. Either accepts config and exposes handleConnection(ws, request).
+  const hocuspocus = serverMod.Hocuspocus
+    ? new serverMod.Hocuspocus(config)
+    : serverMod.Server.configure(config);
+
   const wss = new WebSocketServer({ noServer: true });
   wss.on("connection", (ws, request) => hocuspocus.handleConnection(ws, request));
   httpServer.on("upgrade", (request, socket, head) => {
@@ -367,7 +443,7 @@ async function attachCollab(httpServer) {
     if (pathname !== COLLAB_PATH) { socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
   });
-  console.log(`[alumere] real-time collab ready →  ws ${COLLAB_PATH}`);
+  console.log(`[alumere] real-time collab ready →  ws ${COLLAB_PATH}  (per-project persistence on)`);
 }
 
 const httpServer = app.listen(PORT, async () => {
