@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Collab spike (M0) — Alumère</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .collab-wrap { max-width: 920px; margin: 0 auto; padding: 18px 16px 28px; }
+  .collab-note { font: 13px/1.5 'Inter', system-ui, sans-serif; color: #55606b; margin: 6px 0 14px; }
+  .collab-note b { color: #243240; }
+  #peers { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0 12px; min-height: 26px; }
+  #peers .peers-label { font: 12px 'Inter', sans-serif; color: #8a95a1; }
+  .peer { font: 12px/1 'Inter', sans-serif; padding: 5px 10px; border-radius: 999px; color: #fff; white-space: nowrap; }
+  #editor { border: 1px solid #dfe3e8; border-radius: 10px; height: 62vh; overflow: hidden; background: #fff; }
+  #editor .cm-editor { height: 100%; }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a class="backlink" href="index.html" title="Torna ai progetti">←</a>
+      <span class="logo">∑</span>
+      <span class="name">Alum<span class="thin">ère</span></span>
+      <span class="projname">Collab spike · M0</span>
+    </div>
+    <div class="toolbar">
+      <span id="connState" class="status idle">…</span>
+    </div>
+  </header>
+
+  <main class="collab-wrap">
+    <p class="collab-note">
+      Spike real-time (Yjs + Hocuspocus). Apri <b>questa stessa pagina in due schede</b>
+      (o due browser): scrivi in una e testo <b>e cursori</b> compaiono nell'altra dal vivo.
+      Stanza condivisa unica, in memoria — <b>nessun salvataggio</b>. Non tocca l'editor vero (quello è M1).
+    </p>
+    <div id="peers"><span class="peers-label">Presenti:</span></div>
+    <div id="editor"></div>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="vendor/codemirror.js"></script>
+  <script type="module" src="collab.js"></script>
+</body>
+</html>

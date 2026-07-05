@@ -337,7 +337,41 @@ async function seedSample() {
   console.log("[alumere] seeded sample project", id);
 }
 
-app.listen(PORT, async () => {
+// ---------- real-time collaboration (M0 spike) ----------
+// A Hocuspocus CRDT server shares the SAME HTTP port: only WebSocket upgrades on
+// COLLAB_PATH are routed to it — every normal HTTP request is untouched, so the
+// compose file and the existing API don't change. It's loaded dynamically, so if
+// the collab deps aren't installed the editor + compile app still boot (collab
+// just stays off) instead of the whole process failing on a missing import.
+// Scope: this spike is an in-memory relay — no persistence into files/ and no auth
+// on the socket yet; those are M1 and the later auth gate on the roadmap.
+const COLLAB_PATH = process.env.COLLAB_PATH || "/collab";
+
+async function attachCollab(httpServer) {
+  let serverMod, WebSocketServer;
+  try {
+    serverMod = await import("@hocuspocus/server");
+    ({ WebSocketServer } = await import("ws"));
+  } catch (e) {
+    console.warn(`[alumere] real-time collab disabled (deps missing): ${e.message}`);
+    return;
+  }
+  // v2 exports both the `Hocuspocus` class and a pre-made `Server` instance; use
+  // whichever is present. Either exposes handleConnection(ws, request).
+  const hocuspocus = serverMod.Hocuspocus ? new serverMod.Hocuspocus() : serverMod.Server;
+  const wss = new WebSocketServer({ noServer: true });
+  wss.on("connection", (ws, request) => hocuspocus.handleConnection(ws, request));
+  httpServer.on("upgrade", (request, socket, head) => {
+    let pathname = "/";
+    try { pathname = new URL(request.url, "http://localhost").pathname; } catch {}
+    if (pathname !== COLLAB_PATH) { socket.destroy(); return; }
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
+  });
+  console.log(`[alumere] real-time collab ready →  ws ${COLLAB_PATH}`);
+}
+
+const httpServer = app.listen(PORT, async () => {
   await seedSample().catch((e) => console.warn("[alumere] seed failed:", e.message));
   console.log(`Alumère draft running →  http://localhost:${PORT}`);
 });
+attachCollab(httpServer);

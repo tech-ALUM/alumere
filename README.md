@@ -207,7 +207,11 @@ This matches the architecture decision the team agreed:
 1. **Real-time collaboration** — add **Yjs** (CRDT) with the **Hocuspocus**
    server and bind it to the CodeMirror editor, so multiple people edit the same
    file live, with cursors. This is the headline feature and the next big step —
-   and it's what removes the last-write-wins limitation above.
+   and it's what removes the last-write-wins limitation above. *An **M0 spike** is
+   already wired up: the server relays a shared document over `ws /collab`, and
+   `public/collab.html` (open it in two tabs) proves live sync + colored cursors
+   labeled by the signed-in user. Binding this into the real per-file editor is the
+   next milestone (M1).*
 2. **Accounts & projects** — logins and a database (PostgreSQL) so projects
    persist and can be shared between members, with real access control instead of
    one shared library.
@@ -222,9 +226,10 @@ This matches the architecture decision the team agreed:
   so it works offline with no runtime CDN dependency. If that bundle is missing it
   falls back to the esm.sh CDN, and finally to a plain-text editor (shown with an
   on-screen notice). Serving from `http://localhost` is required — don't open the
-  pages as `file://`. The bundle's **source** is `build/cm-entry.mjs`; rebuild it
-  after editing with:
-  `npx esbuild build/cm-entry.mjs --bundle --format=iife --outfile=public/vendor/codemirror.js --minify`.
+  pages as `file://`. The bundle's **source** is `build/cm-entry.mjs` (which now also
+  bundles the Yjs real-time pieces as `window.YCOLLAB`); rebuild it after editing with
+  **`npm run build:client`** (driven by `build/build-client.mjs`, which aliases the
+  Node-only `ws` package to the browser's native WebSocket).
 - **No authentication yet** — intended for a **trusted local** setting, exactly
   the small-group scenario we're targeting. Don't expose the instance to the open
   internet as-is.

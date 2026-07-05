@@ -7,9 +7,7 @@ data/
 # ---- Output di build di CodeMirror ----
 # NB: public/vendor/codemirror.js NON è ignorato: è committato apposta così
 # l'app gira senza step di build. La SORGENTE è build/cm-entry.mjs (tracciata).
-# Rigenera il bundle con:
-#   npx esbuild build/cm-entry.mjs --bundle --format=iife \
-#     --outfile=public/vendor/codemirror.js --minify
+# Rigenera il bundle con:  npm run build:client   (vedi build/build-client.mjs)
 
 # ---- File di sistema macOS ----
 .DS_Store

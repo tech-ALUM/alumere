@@ -2,17 +2,35 @@
   "name": "alumere",
   "version": "0.1.0",
   "private": true,
-  "description": "Alum\u00e8re \u2014 a self-hosted, Overleaf-like collaborative LaTeX editor (draft / prototype).",
+  "description": "Alumère — a self-hosted, Overleaf-like collaborative LaTeX editor (draft / prototype).",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "build:client": "node build/build-client.mjs"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@hocuspocus/server": "^2.15.2",
+    "adm-zip": "^0.5.16",
     "express": "^4.19.2",
-    "adm-zip": "^0.5.16"
+    "ws": "^8.17.1",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.8"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.0.0",
+    "@codemirror/commands": "^6.0.0",
+    "@codemirror/language": "^6.0.0",
+    "@codemirror/legacy-modes": "^6.0.0",
+    "@codemirror/search": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
+    "@hocuspocus/provider": "^2.15.2",
+    "@lezer/highlight": "^1.0.0",
+    "esbuild": "^0.25.0",
+    "y-codemirror.next": "^0.3.5"
   }
 }
