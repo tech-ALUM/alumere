@@ -27,13 +27,28 @@ const PORT = process.env.PORT || 3000;
 const PROJECTS_DIR = process.env.PROJECTS_DIR || path.join(__dirname, "data", "projects");
 const SEED_DIR = path.join(__dirname, "seed");
 
-// ---------- identity / session (lightweight: signed cookie, no real auth yet) ----------
-// Phase 1: users type their name; a signed httpOnly cookie remembers them for a year
-// so they don't re-enter it on every visit. Phase 2 (later) swaps name entry for an
-// email login with company-domain validation — the cookie machinery stays the same.
+// ---------- identity / session (magic-link auth, domain-restricted) ----------
+// You sign in with your company email: we mail a single-use link; opening it sets a
+// signed httpOnly cookie that remembers you for a year. No passwords. The display name
+// is derived from the address (mario.rossi@ → "Mario Rossi"); the cookie machinery
+// (sign/verify below) is unchanged from the earlier name-only phase.
 const COOKIE_NAME = "alm_session";
 const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;       // 1 year
 const COOKIE_SECURE = process.env.COOKIE_SECURE === "1";    // set to 1 when served over HTTPS
+
+// ---------- magic-link auth config ----------
+// Only addresses on this domain may sign in (e.g. "dominio.com"). Empty = allow any (DEV ONLY).
+const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "").trim().toLowerCase();
+// Absolute base for the links we email (e.g. https://docs.dominio.com). Empty = derive from request.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+const LOGIN_TOKEN_TTL_MS = (Number(process.env.LOGIN_TOKEN_TTL_MIN) || 15) * 60 * 1000;
+// SMTP (e.g. privateemail). If SMTP_HOST is empty we log the link instead of mailing it (dev).
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT) || 465;
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+if (!ALLOWED_EMAIL_DOMAIN) console.warn("[alumere][auth] ALLOWED_EMAIL_DOMAIN non impostato: qualsiasi dominio è ammesso (solo per dev).");
 
 // Persistent secret used to sign session cookies. Prefer SESSION_SECRET in prod;
 // otherwise keep one on disk inside PROJECTS_DIR (the persisted volume) so sessions
@@ -83,15 +98,80 @@ async function writeMeta(id, meta) {
 const SYSTEM_USER = { id: "system", name: "Alumère (system)" };
 const briefUser = (u) => (u ? { id: u.id, name: u.name } : null);
 
-// Build a user from a typed name. The id is derived from the lowercased full name,
-// so the same person gets the same id across devices (good enough for attribution now).
-function makeUser(firstName, lastName) {
-  const fn = String(firstName || "").trim().replace(/\s+/g, " ").slice(0, 60);
-  const ln = String(lastName || "").trim().replace(/\s+/g, " ").slice(0, 60);
-  if (!fn || !ln) return null;
-  const name = `${fn} ${ln}`;
-  const id = "u-" + crypto.createHash("sha256").update(name.toLowerCase()).digest("hex").slice(0, 12);
-  return { id, firstName: fn, lastName: ln, name };
+// Derive a display name from an email. "nome.cognome@" → "Nome Cognome"; a role address
+// with no dot ("admin@") → "AdminAccount". A capital inside a segment marks a word break
+// (maria.delCarmen@ → "Maria Del Carmen"), so we keep the local-part's ORIGINAL case here
+// (the id, instead, is the lowercased full email — a stable identity across devices).
+const capWord = (w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w);
+function displayNameFromEmail(email) {
+  const local = String(email).split("@")[0];
+  if (local.includes(".")) {
+    return local.split(".")
+      .flatMap((seg) => seg.split(/(?<=[a-z])(?=[A-Z])/))
+      .filter(Boolean).map(capWord).join(" ");
+  }
+  return capWord(local) + "Account";
+}
+// Validate an email and gate it to the allowed domain. Returns { id, name } or null.
+function userFromEmail(raw) {
+  const email = String(raw || "").trim();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  const id = email.toLowerCase();
+  if (ALLOWED_EMAIL_DOMAIN && !id.endsWith("@" + ALLOWED_EMAIL_DOMAIN)) return null;
+  return { id, name: displayNameFromEmail(email) };
+}
+
+// Pending magic-link tokens: single-use, short-lived, in memory. Unused tokens expire;
+// a restart just drops them (the user requests a new link) — no security impact.
+const pendingLogins = new Map();                            // token -> { user, exp }
+function prunePending() {
+  const now = Date.now();
+  for (const [t, v] of pendingLogins) if (v.exp <= now) pendingLogins.delete(t);
+}
+// Rate limiting so /api/auth/request can't be turned into a mail cannon. We throttle
+// per-EMAIL (stops bombing one inbox) with a generous per-IP backstop — an office behind
+// NAT shares one public IP, so the per-IP cap must be loose. Only valid requests count.
+const emailHits = new Map(), ipHits = new Map();            // key -> { n, since }
+function rateHit(map, key, max, windowMs) {
+  const now = Date.now();
+  const h = map.get(key);
+  if (!h || now - h.since > windowMs) { map.set(key, { n: 1, since: now }); return true; }
+  if (h.n >= max) return false;
+  h.n++; return true;
+}
+// Mail transport: real SMTP if SMTP_HOST is set, else a dev fallback that logs the link.
+// nodemailer is imported lazily & guarded, so the server boots even if it isn't installed.
+let _transport;                                            // undefined = untried, null = unavailable
+async function mailTransport() {
+  if (_transport !== undefined) return _transport;
+  if (!SMTP_HOST) return (_transport = null);
+  try {
+    const nodemailer = (await import("nodemailer")).default;
+    _transport = nodemailer.createTransport({
+      host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465,
+      auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+    });
+  } catch (e) {
+    console.warn(`[alumere][auth] nodemailer non disponibile (${e.message}); uso il fallback console`);
+    _transport = null;
+  }
+  return _transport;
+}
+async function sendLoginLink(email, link) {
+  const minutes = Math.round(LOGIN_TOKEN_TTL_MS / 60000);
+  const t = await mailTransport();
+  if (!t) {                                                // dev: no SMTP → print the link to the log
+    console.log(`[alumere][auth] (SMTP off) login link per ${email}:\n  ${link}`);
+    return;
+  }
+  await t.sendMail({
+    from: SMTP_FROM, to: email,
+    subject: "Accesso ad Alumère",
+    text:
+      `Apri questo link per accedere ad Alumère (scade tra ${minutes} minuti).\n` +
+      `Aprilo dal dispositivo su cui vuoi entrare:\n\n${link}\n\n` +
+      `Se non hai richiesto tu l'accesso, ignora pure questa mail.`,
+  });
 }
 function signSession(user) {
   const payload = Buffer.from(JSON.stringify(user)).toString("base64url");
@@ -188,14 +268,49 @@ async function readFilesFlat(dir, prefix = "") {
 // ---------- session endpoints ----------
 app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
 
-app.post("/api/session", (req, res) => {
-  const { firstName, lastName } = req.body || {};
-  const user = makeUser(firstName, lastName);
-  if (!user) return res.status(400).json({ ok: false, error: "Inserisci nome e cognome." });
-  res.cookie(COOKIE_NAME, signSession(user), {
+// Login, step 1: submit a company email → we mail a single-use magic link.
+app.post("/api/auth/request", async (req, res) => {
+  const user = userFromEmail((req.body || {}).email);
+  if (!user) {
+    const d = ALLOWED_EMAIL_DOMAIN ? `@${ALLOWED_EMAIL_DOMAIN}` : "aziendale";
+    return res.status(403).json({ ok: false, error: `Serve una mail ${d} valida.` });
+  }
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  if (!rateHit(emailHits, user.id, 5, 10 * 60 * 1000) || !rateHit(ipHits, ip, 60, 10 * 60 * 1000)) {
+    return res.status(429).json({ ok: false, error: "Troppe richieste, riprova tra qualche minuto." });
+  }
+  prunePending();
+  const token = crypto.randomBytes(32).toString("base64url");
+  pendingLogins.set(token, { user, exp: Date.now() + LOGIN_TOKEN_TTL_MS });
+  const base = PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+  const link = `${base}/api/auth/verify?token=${token}`;
+  try {
+    await sendLoginLink(user.id, link);
+  } catch (e) {
+    pendingLogins.delete(token);
+    console.error(`[alumere][auth] invio mail fallito: ${e.message}`);
+    return res.status(502).json({ ok: false, error: "Invio della mail non riuscito, riprova." });
+  }
+  res.json({ ok: true, email: user.id });                  // generic — the client shows "controlla la posta"
+});
+
+// Login, step 2: the emailed link lands here → consume the token, set the session, enter.
+app.get("/api/auth/verify", (req, res) => {
+  prunePending();
+  const token = String(req.query.token || "");
+  const pend = token ? pendingLogins.get(token) : null;
+  if (!pend || pend.exp <= Date.now()) {
+    return res.status(400).type("html").send(
+      `<!doctype html><meta charset="utf-8"><title>Link non valido</title>` +
+      `<div style="font-family:system-ui;max-width:28rem;margin:4rem auto;text-align:center">` +
+      `<h2>Link non valido o scaduto</h2><p>Richiedi un nuovo accesso.</p>` +
+      `<p><a href="/">Torna ad Alumère</a></p></div>`);
+  }
+  pendingLogins.delete(token);                             // single-use
+  res.cookie(COOKIE_NAME, signSession(pend.user), {
     httpOnly: true, sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_MS, secure: COOKIE_SECURE,
   });
-  res.json({ ok: true, user });
+  res.redirect("/");
 });
 
 app.post("/api/session/logout", (_req, res) => {
@@ -204,7 +319,7 @@ app.post("/api/session/logout", (_req, res) => {
 });
 
 // ---------- project endpoints ----------
-app.get("/api/projects", async (_req, res) => {
+app.get("/api/projects", requireUser, async (_req, res) => {
   try {
     await mkdir(PROJECTS_DIR, { recursive: true });
     const dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory());
@@ -218,7 +333,7 @@ app.get("/api/projects", async (_req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.get("/api/projects/:id", async (req, res) => {
+app.get("/api/projects/:id", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
   const meta = await readMeta(id);
@@ -309,7 +424,7 @@ function runLatexmk(cwd, mainFile, engineFlag) {
   });
 }
 
-app.post("/api/compile", async (req, res) => {
+app.post("/api/compile", requireUser, async (req, res) => {
   const { files, main = "main.tex", engine = "xelatex" } = req.body || {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ ok: false, log: "No files were sent to compile." });
   const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.xelatex;
@@ -441,6 +556,9 @@ async function attachCollab(httpServer) {
     let pathname = "/";
     try { pathname = new URL(request.url, "http://localhost").pathname; } catch {}
     if (pathname !== COLLAB_PATH) { socket.destroy(); return; }
+    // Gate: only signed-in users may open a collab socket (same signed cookie as the REST API).
+    const user = verifySession(parseCookies(request)[COOKIE_NAME]);
+    if (!user) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
   });
   console.log(`[alumere] real-time collab ready →  ws ${COLLAB_PATH}  (per-project persistence on)`);

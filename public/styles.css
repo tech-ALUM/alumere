@@ -281,10 +281,18 @@ body[data-editor-theme="nord"]{
   background: rgba(20, 30, 41, .55); backdrop-filter: blur(3px);
 }
 .auth-card {
+  position: relative;
   width: 100%; max-width: 380px; background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px;
   padding: 26px 26px 24px; box-shadow: 0 24px 60px rgba(16, 48, 73, .28);
 }
+.auth-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 30px; height: 30px; display: grid; place-items: center;
+  border: 0; border-radius: 8px; background: transparent;
+  color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.auth-close:hover { background: var(--accent-soft); color: var(--ink); }
 .auth-brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; color: var(--ink); }
 .auth-brand .logo {
   width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center;

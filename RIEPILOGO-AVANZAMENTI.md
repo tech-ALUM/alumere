@@ -7,6 +7,61 @@
 
 ---
 
+## 2026-07-11 — Sicurezza: login magic-link, dominio-ristretto (M-sec step 1–3) ✅
+
+In vista dell'apertura su internet (la collaborazione real-time richiede **un solo server**
+raggiungibile da tutti → i buchi di sicurezza vanno chiusi prima). Sostituita l'"identità"
+(solo nome) con **autenticazione vera passwordless**: login via **magic link** su email del
+**dominio aziendale**. Fatto e verificato su branch `feat/auth-magic-link` (Step 1–3);
+manca solo lo Step 4 (SMTP reale + HTTPS), che è deploy/config, non codice.
+
+**Cosa c'è ora**
+- **Login (server, `server.js`)**: `POST /api/auth/request {email}` valida formato + **gate dominio**
+  (`ALLOWED_EMAIL_DOMAIN`), crea un **token monouso** a scadenza e manda il link
+  `…/api/auth/verify?token=…`; `GET /api/auth/verify` consuma il token e setta il cookie di sessione
+  firmato (**riuso `signSession`**, macchina cookie invariata). Rimosso il vecchio `POST /api/session`.
+- **Nome derivato dall'email**: `mario.rossi@`→"Mario Rossi"; **camelCase = confine di parola**
+  (`maria.delCarmen@`→"Maria Del Carmen"); senza punto → account funzionale (`admin@`→"AdminAccount").
+  **Id utente = email lowercased** (identità stabile); il nome usa il case originale.
+- **Gate propagato** (`requireUser`): `GET /api/projects`, `GET /api/projects/:id`, `POST /api/compile`
+  e il **websocket `/collab`** (autenticato leggendo lo stesso cookie nell'`upgrade`). Restano
+  pubblici solo il flusso di login e `/api/health`.
+- **Rate-limit**: per-email (5/10min, blocca il mail-bombing di una casella) + **backstop per-IP
+  generoso** (60/10min) — così il **NAT dell'ufficio** (un solo IP condiviso) non si autoblocca.
+- **Client (`public/auth.js`)**: overlay email → "controlla la posta" (poll finché la sessione diventa
+  il **nuovo** utente → reload). **"Cambia utente" annullabile**: apre l'overlay con una **X** (alto a
+  dx) + Esc **senza sloggare** — il cambio avviene solo completando un nuovo accesso.
+- **`nodemailer`** importato in modo **guardato** (dynamic import): senza SMTP l'app non crasha e il
+  link viene **stampato nel log** (fallback dev).
+
+**Scelte (e perché)**
+- **Magic link invece di password**: l'attribuzione (spina dorsale dell'app + history futura) diventa
+  affidabile (casella reale al dominio), niente password da custodire/resettare, **nessun DB utenti**
+  per la v1 (l'allowlist È il dominio). Era anche la direzione già prevista nei commenti del codice.
+- **Gate del ws nell'`upgrade`** (parse cookie + `verifySession`), non un `onAuthenticate` di Hocuspocus:
+  riusa la roba REST; socket non autenticati → 401 + destroy.
+- **Import mailer guardato**: coerente con come sono trattate le dep collab (l'app parte comunque).
+
+**Config (env)**: `ALLOWED_EMAIL_DOMAIN` (vuoto = qualsiasi, **solo dev**), `PUBLIC_BASE_URL`,
+`LOGIN_TOKEN_TTL_MIN` (default 15), `SMTP_HOST/PORT/USER/PASS/FROM`, `COOKIE_SECURE=1` (dietro HTTPS).
+
+**Verificato** (in isolamento su :3100, senza toccare i dati né il container :3000):
+- **Headless**: flusso auth **23/23** (gate dominio, derivazione nome incl. `delCarmen`, token monouso,
+  rate-limit per-email, NAT-friendly) + **gate 10/10** (senza cookie → 401 su letture/compile/ws; con
+  cookie → 200 e handshake ws 101; login+health pubblici).
+- **Browser**: login end-to-end (email → link dal log → dentro come "Laura Bianchi"), gmail rifiutata in
+  UI, "cambia utente" + X che chiude mantenendo la sessione.
+
+**Prossimo → Step 4 (deploy pubblico)**
+- **SMTP reale**: `privateemail` da una casella esistente (buona deliverability) — indirizzo/credenziali
+  da fornire al deploy.
+- **HTTPS obbligatorio**: reverse proxy (es. Caddy, TLS automatico), `COOKIE_SECURE=1`, `PUBLIC_BASE_URL`
+  = URL pubblico, `ALLOWED_EMAIL_DOMAIN` = dominio vero.
+- Poi eventuali: allowlist per-persona (oltre al dominio), ACL per-progetto, persistenza dei token
+  pending (ora in memoria).
+
+---
+
 ## 2026-07-05 — M1 Step 1 (pipe collaborativo + persistenza): implementato ✅
 
 Primo step di M1: l'**editor vero** è ora collaborativo e i contenuti girano su Yjs,

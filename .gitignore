@@ -28,6 +28,9 @@ npm-debug.log*
 .idea/
 *.swp
 
+# ---- Config locale di Claude Code (settings.local, launch.json con path assoluti) ----
+.claude/
+
 # ---- Artefatti LaTeX, se mai compilate fuori dal container ----
 *.aux
 *.fls
