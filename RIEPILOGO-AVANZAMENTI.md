@@ -7,13 +7,58 @@
 
 ---
 
+## 2026-07-12 — Deploy pubblico (M-sec Step 4): artefatti + verifica ✅
+
+Preparato tutto il necessario per aprire l'app su internet dietro HTTPS con l'auth magic-link. Al deploy
+manca solo **fornire dominio + DNS** e **credenziali SMTP reali**: codice e config sono pronti e **verificati**.
+
+**Cosa c'è ora**
+- **`docker-compose.prod.yml`**: stack di produzione = **Caddy** (TLS automatico Let's Encrypt) davanti all'**app**,
+  che **non** pubblica porte sull'host (solo `expose`, raggiungibile da Caddy come `app:3000`). Config operativa via
+  `env_file: .env`; volumi persistenti per dati (`alumere-data`) e certificati (`caddy_data`/`caddy_config`);
+  healthcheck dell'app con `node -e fetch(...)` (niente curl nell'immagine slim).
+- **`Caddyfile`**: `reverse_proxy app:3000`, dominio da `{$PUBLIC_DOMAIN}`; gli upgrade WebSocket di `/collab`
+  passano trasparenti.
+- **`.env.example`**: tutte le env documentate (dominio, gate, cookie, SMTP) → `cp .env.example .env` sul server.
+- **`.dockerignore`** (prima **assente**): impedisce che `.env`/segreti finiscano nei layer dell'immagine e che un
+  `node_modules`/`data` locale la sporchi.
+- **`DEPLOY.md`**: runbook passo-passo (DNS → `.env` → avvio → verifica → SMTP/SPF-DKIM → backup volume → troubleshooting).
+- **`server.js`**: +3 righe `trust proxy` **opt-in** (`TRUST_PROXY=1`) → dietro Caddy `req.ip` è l'IP reale del client
+  (rate-limit per-IP di nuovo corretto). Inerte senza la env: dev/run diretto invariati.
+- **`README`**: sezione Configuration aggiornata + rimosso il caveat "no auth / non esporre" ormai falso.
+
+**Scelte (e perché)**
+- **Caddy**: TLS automatico, config minimale, WS passthrough senza settaggi. App non esposta → solo Caddy pubblica 80/443.
+- **`COOKIE_SECURE=1` da env** (non da `req.protocol`): il cookie è `Secure` anche se l'app dietro il proxy vede HTTP;
+  idem `PUBLIC_BASE_URL` esplicito per i link → non dipende dal protocollo visto dall'app.
+- **Lockfile**: `nodemailer` è in `package.json` ma **manca dal `package-lock.json`**; il Dockerfile usa `npm install`
+  (non `npm ci`) quindi l'immagine lo prende comunque. Rigenerare il lock + passare a `npm ci` è hardening segnato come
+  follow-up (task in background) — non blocca.
+
+**Verificato (Docker in locale, tutto ISOLATO dal container di prod)**
+- **Statico**: sintassi `server.js`; `docker compose config` (exit 0); `caddy validate` → "Valid configuration";
+  `npm install --omit=dev` installa davvero `nodemailer` (v6.10.1) nonostante il lock disallineato (host non toccato).
+- **Runtime end-to-end attraverso Caddy — 11/11**: health pubblica; gate 401 senza cookie / 200 con; gate dominio
+  (`@gmail.com` → 403); magic-link emesso col `PUBLIC_BASE_URL`; verify → 302 + cookie **Secure + HttpOnly** su HTTPS;
+  **WebSocket `/collab` attraverso il proxy** aperto col cookie, respinto senza.
+- **Percorso SMTP reale (MailHog)**: `POST /api/auth/request` → mail **realmente inviata** via `nodemailer` e catturata:
+  destinatario `laura.bianchi@example.com`, mittente `noreply@example.com`, oggetto "Accesso ad Alumère", link presente.
+  Resta server-side solo la deliverability vera (SPF/DKIM/spam).
+
+**Prossimo → deploy vero**: su un VPS → `cp .env.example .env` coi valori reali (dominio, `ALLOWED_EMAIL_DOMAIN`, SMTP),
+record DNS A → server, `docker compose -f docker-compose.prod.yml up -d --build`. Poi eventuali: allowlist per-persona
+(oltre al dominio), ACL per-progetto, persistenza dei token pending (ora in memoria).
+
+---
+
 ## 2026-07-11 — Sicurezza: login magic-link, dominio-ristretto (M-sec step 1–3) ✅
 
 In vista dell'apertura su internet (la collaborazione real-time richiede **un solo server**
 raggiungibile da tutti → i buchi di sicurezza vanno chiusi prima). Sostituita l'"identità"
 (solo nome) con **autenticazione vera passwordless**: login via **magic link** su email del
-**dominio aziendale**. Fatto e verificato su branch `feat/auth-magic-link` (Step 1–3);
-manca solo lo Step 4 (SMTP reale + HTTPS), che è deploy/config, non codice.
+**dominio aziendale**. Fatto e verificato (Step 1–3), ora **mergiato in `main`** e pushato
+(`fedffed`, fast-forward su `c071e15`); manca solo lo Step 4 (SMTP reale + HTTPS), che è
+deploy/config, non codice.
 
 **Cosa c'è ora**
 - **Login (server, `server.js`)**: `POST /api/auth/request {email}` valida formato + **gate dominio**

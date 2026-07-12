@@ -22,6 +22,10 @@ import AdmZip from "adm-zip";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Behind a TLS-terminating reverse proxy (prod): trust the first hop so req.ip is the real
+// client from X-Forwarded-For — the per-IP rate-limit backstop needs the true IP, not the
+// proxy's. Opt-in via env (TRUST_PROXY=1) so direct/local runs are unaffected.
+if (process.env.TRUST_PROXY) app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
 
 // Where persistent projects live. Mount a Docker volume here to keep them.
 const PROJECTS_DIR = process.env.PROJECTS_DIR || path.join(__dirname, "data", "projects");

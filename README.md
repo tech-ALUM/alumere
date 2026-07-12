@@ -34,8 +34,12 @@ alumDocs/
 │       └── codemirror.js     # Pre-built CodeMirror bundle (committed; runs offline)
 ├── data/                     # Persistent project store (created at runtime; Docker volume — git-ignored)
 ├── Dockerfile                # Node 22 + a TeX Live subset (zero local install needed)
-├── docker-compose.yml        # Production-style run
+├── docker-compose.yml        # Simple single-container run (localhost:3000)
 ├── docker-compose.dev.yml    # Development run: hot-reload via bind-mount + `node --watch`
+├── docker-compose.prod.yml   # Public deploy: Caddy (auto-HTTPS) + app (see DEPLOY.md)
+├── Caddyfile                 # Reverse-proxy config for the public deploy
+├── .env.example              # All deploy env vars (copy to .env on the server)
+├── DEPLOY.md                 # Step-by-step production runbook
 └── package.json
 ```
 
@@ -191,12 +195,18 @@ store (`/api/projects`, backed by `PROJECTS_DIR`).
 
 ## Configuration
 
-The server reads two environment variables:
+For a local/dev run the server needs almost nothing:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the server listens on |
 | `PROJECTS_DIR` | `data/projects` | Where projects are stored on disk (mounted as a volume in Docker) |
+
+**Deploying it publicly** (magic-link auth, HTTPS, email) adds a handful more —
+`ALLOWED_EMAIL_DOMAIN`, `PUBLIC_BASE_URL`, `COOKIE_SECURE`, `TRUST_PROXY`,
+`SESSION_SECRET`, and the `SMTP_*` group. They're all documented in
+[`.env.example`](.env.example), and [`DEPLOY.md`](DEPLOY.md) is a step-by-step
+runbook (Caddy reverse proxy with automatic TLS + `docker-compose.prod.yml`).
 
 ---
 
@@ -230,7 +240,8 @@ This matches the architecture decision the team agreed:
   bundles the Yjs real-time pieces as `window.YCOLLAB`); rebuild it after editing with
   **`npm run build:client`** (driven by `build/build-client.mjs`, which aliases the
   Node-only `ws` package to the browser's native WebSocket).
-- **No authentication yet** — intended for a **trusted local** setting, exactly
-  the small-group scenario we're targeting. Don't expose the instance to the open
-  internet as-is.
+- **Authentication is passwordless magic-link**, restricted to your company email
+  domain — every read/write and the collaboration socket require a signed-in user.
+  For a public deployment (HTTPS + SMTP) follow [`DEPLOY.md`](DEPLOY.md); the local
+  runs above are fine for a trusted network.
 - **One compile at a time per request**; fine for a few users.

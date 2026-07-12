@@ -1,0 +1,57 @@
+# Alumère — PRODUZIONE (deploy pubblico su internet).
+#
+# Architettura:
+#   Internet ──▶ Caddy (:80/:443, HTTPS automatico) ──▶ app:3000 (solo rete interna Docker)
+#
+# L'app NON è esposta direttamente sull'host: solo Caddy pubblica le porte. Tutta la config
+# operativa sta in `.env` (copia da `.env.example`). Avvio:
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Procedura completa (DNS, SMTP, verifica, backup) in DEPLOY.md.
+
+services:
+  app:
+    build: .
+    container_name: alumere
+    # Nessuna porta pubblicata sull'host: raggiungibile solo da Caddy come "app:3000".
+    expose:
+      - "3000"
+    env_file:
+      - .env
+    environment:
+      # Storage persistente (combacia col volume qui sotto). Infra, non segreto → sta qui.
+      - PROJECTS_DIR=/app/data/projects
+    volumes:
+      - alumere-data:/app/data
+    healthcheck:
+      # Usa node (fetch globale in Node 22): niente dipendenza da curl/wget nell'immagine slim.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: alumere-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Fallisce subito con un messaggio chiaro se manca in .env.
+      - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:?imposta PUBLIC_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persistono i certificati TLS: senza questi, ogni restart ri-emette (rate-limit Let's Encrypt).
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  alumere-data:
+  caddy_data:
+  caddy_config:

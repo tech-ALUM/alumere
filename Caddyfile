@@ -1,0 +1,14 @@
+# Alumère — reverse proxy di produzione.
+#
+# Caddy termina TLS (certificato automatico via Let's Encrypt per PUBLIC_DOMAIN) e inoltra
+# tutto all'app sulla rete interna di Docker. Gli upgrade WebSocket di /collab passano in
+# modo trasparente: Caddy propaga automaticamente gli header Upgrade/Connection.
+#
+# Il dominio arriva da .env (PUBLIC_DOMAIN), iniettato nell'ambiente del container `caddy`.
+# Vuoi le notifiche di scadenza del certificato? Aggiungi un blocco globale in cima:
+#     { email tu@example.com }
+
+{$PUBLIC_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}
