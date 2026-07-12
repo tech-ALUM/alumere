@@ -1,0 +1,34 @@
+# Alumère — vhost EDGE di RIFERIMENTO (deploy reale sul VPS ALUM).
+#
+# ⚠️  COPIA DI RIFERIMENTO ricostruita dal deploy del 2026-07-12, per versionare
+#     una config che oggi vive SOLO sul VPS in /opt/alum/caddy/Caddyfile.
+#     La FONTE DI VERITÀ resta quel file sul server: se divergono, vince il VPS.
+#
+# Contesto (≠ dallo stack docker-compose.prod.yml + ./Caddyfile di questo repo):
+# sul VPS gira GIÀ un Caddy edge (un container, sulla rete Docker `alum_web`) che
+# fa da reverse proxy per più servizi. Alumère NON porta il proprio Caddy: si
+# aggancia a `alum_web` con alias `alumere` (vedi docker-compose.alum.yml) e il
+# Caddy edge la raggiunge PER NOME. L'app non pubblica porte sull'host.
+#
+# Questo file è la porzione (un vhost) che va aggiunta al Caddyfile edge; il resto
+# del Caddyfile edge (gli altri servizi) non è di competenza di questo repo.
+# Vedi la sezione "Deploy reale ALUM" in DEPLOY.md.
+
+docs.alum-lab.com {
+	encode zstd gzip
+
+	# Reverse proxy verso il container dell'app sulla rete condivisa `alum_web`
+	# (alias `alumere`). Gli upgrade WebSocket di /collab passano trasparenti:
+	# Caddy propaga da sé gli header Upgrade/Connection.
+	reverse_proxy alumere:3000
+
+	# I magic-link sono /api/auth/verify?token=… : redigi il `token` dalla query
+	# nei log d'accesso (come gli altri vhost sul VPS) così non finisce in chiaro.
+	log {
+		format filter {
+			request>uri query {
+				replace token REDACTED
+			}
+		}
+	}
+}

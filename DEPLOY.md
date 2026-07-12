@@ -23,6 +23,21 @@ Gli upgrade WebSocket di `/collab` (collaborazione real-time) passano trasparent
 
 ---
 
+## Due modalità di deploy
+
+Scegli in base a cosa gira **già** sul server:
+
+- **A) Stack standalone** — `docker-compose.prod.yml` + `./Caddyfile`: porta **il proprio Caddy**
+  che pubblica `80/443` e fa TLS + reverse proxy. Per un **server pulito**, dove Caddy non gira già.
+  È la modalità dei passi **1–5** qui sotto.
+- **B) Integrazione con un Caddy edge esistente** — `docker-compose.alum.yml` + `Caddyfile.alum-edge`:
+  **niente Caddy interno** (confliggerebbe su `80/443`); l'app si aggancia a una rete Docker condivisa e
+  il Caddy già presente la raggiunge **per nome**. **È la modalità in produzione sul VPS ALUM**
+  (`docs.alum-lab.com`) → vedi ["Deploy reale ALUM"](#deploy-reale-alum-caddy-edge-esistente).
+  I passi **1–3** (DNS, codice, `.env`) restano identici; cambiano avvio e reverse proxy.
+
+---
+
 ## Prerequisiti
 
 - Un **VPS Linux** con **Docker** + plugin **Docker Compose** (`docker compose version`).
@@ -125,6 +140,40 @@ docker compose -f docker-compose.prod.yml logs -f app
 
 ---
 
+## Deploy reale ALUM (Caddy edge esistente)
+
+Configurazione **realmente in produzione** su `https://docs.alum-lab.com` (VPS `84.247.128.81`).
+Sul VPS gira già un **Caddy edge** (container, rete Docker `alum_web`) che serve più servizi:
+**non** si lancia lo stack `prod` (il suo Caddy confliggerebbe su `80/443`). Convenzione directory:
+`/opt/alum/<servizio>` → qui `/opt/alum/alumere`.
+
+1. **Codice + `.env`** come ai passi 2–3, nella directory del servizio.
+2. **Avvia solo l'app**, agganciata alla rete condivisa `alum_web`:
+   ```bash
+   docker compose -f docker-compose.alum.yml up -d --build
+   ```
+   L'app fa `expose: 3000` (nessuna porta host) ed entra in `alum_web` con alias `alumere`.
+   La rete è `external: true`: deve esistere già (la crea il Caddy edge; in mancanza:
+   `docker network create alum_web`).
+3. **Vhost sul Caddy edge** (`/opt/alum/caddy/Caddyfile`): aggiungi il blocco di
+   [`Caddyfile.alum-edge`](./Caddyfile.alum-edge) (reverse_proxy `alumere:3000`, WebSocket `/collab`
+   trasparente, **redazione del `token` nei log**). Ricarica Caddy — col Caddyfile bind-mount a file
+   singolo può servire il force-recreate del container edge.
+4. **Verifica** come al passo 5, ma su `https://docs.alum-lab.com`.
+
+> `Caddyfile.alum-edge` nel repo è una **copia di riferimento**: la fonte di verità è
+> `/opt/alum/caddy/Caddyfile` sul VPS. Se divergono, vince il VPS.
+
+**Backup (stack alum).** I progetti vivono nel volume del servizio. Col compose in `/opt/alum/alumere`
+il nome è tipicamente **`alumere_alumere-data`** (verifica con `docker volume ls`):
+
+```bash
+docker run --rm -v alumere_alumere-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/alumere-data-$(date +%F).tgz -C /data .
+```
+
+---
+
 ## SMTP e deliverability (privateemail)
 
 - Host tipico: `mail.privateemail.com`, porta `465` (SSL) o `587` (STARTTLS).
@@ -152,8 +201,9 @@ docker compose -f docker-compose.prod.yml logs -f app     # o: caddy
 ```
 
 **Backup dei dati.** Tutti i progetti (e il `.session-secret` su disco) vivono nel volume `alumere-data`.
-Il nome reale del volume è prefissato dal nome-progetto compose (spesso `alumdocs_alumere-data`; verifica con
-`docker volume ls`):
+Il nome reale del volume è prefissato dal nome-progetto compose (per lo stack standalone spesso
+`alumdocs_alumere-data`; per lo stack ALUM è `alumere_alumere-data` — vedi la sezione "Deploy reale ALUM".
+In dubbio, `docker volume ls`):
 
 ```bash
 docker run --rm -v alumdocs_alumere-data:/data -v "$PWD":/backup alpine \
@@ -191,14 +241,12 @@ Ripristino: l'inverso (`tar xzf … -C /data`) su un volume vuoto, ad app ferma.
 
 ---
 
-## Nota — build riproducibile (hardening opzionale)
+## Nota — build riproducibile
 
-`package-lock.json` al momento non include `nodemailer`: il Dockerfile usa `npm install`, quindi
-l'immagine viene comunque costruita correttamente (nodemailer c'è, l'invio mail funziona). Per build
-**riproducibili** conviene rigenerare il lock e passare a `npm ci`. Node non è sull'host, quindi fallo
-in un container usa-e-getta:
+Il Dockerfile usa **`npm ci`** contro un `package-lock.json` allineato: la build è riproducibile
+(installa le versioni esatte del lock). Per aggiornare le dipendenze, rigenera il lock in un container
+usa-e-getta (Node non è sull'host) e ricommitta `package.json` + `package-lock.json` insieme:
 
 ```bash
 docker run --rm -v "$PWD":/app -w /app node:22-bookworm-slim npm install --package-lock-only
-# poi, nel Dockerfile, sostituisci `npm install --omit=dev` con `npm ci --omit=dev`
 ```

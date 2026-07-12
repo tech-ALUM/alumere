@@ -36,8 +36,10 @@ alumDocs/
 ├── Dockerfile                # Node 22 + a TeX Live subset (zero local install needed)
 ├── docker-compose.yml        # Simple single-container run (localhost:3000)
 ├── docker-compose.dev.yml    # Development run: hot-reload via bind-mount + `node --watch`
-├── docker-compose.prod.yml   # Public deploy: Caddy (auto-HTTPS) + app (see DEPLOY.md)
-├── Caddyfile                 # Reverse-proxy config for the public deploy
+├── docker-compose.prod.yml   # Public deploy A (standalone): Caddy (auto-HTTPS) + app (see DEPLOY.md)
+├── docker-compose.alum.yml   # Public deploy B (ALUM): app only, behind an existing edge Caddy
+├── Caddyfile                 # Reverse-proxy config for deploy A (self-contained Caddy)
+├── Caddyfile.alum-edge       # Reference vhost for deploy B (existing edge Caddy on the VPS)
 ├── .env.example              # All deploy env vars (copy to .env on the server)
 ├── DEPLOY.md                 # Step-by-step production runbook
 └── package.json
