@@ -7,6 +7,46 @@
 
 ---
 
+## 2026-07-12 (notte) — Follow-up post-deploy chiusi: build riproducibile + config edge versionata ✅
+
+Chiusi i follow-up non bloccanti lasciati aperti dal deploy, + sistemata una vulnerabilità high
+trovata strada facendo. Lavoro sul branch **`follow-up/deploy-hardening`** (2 commit), **non ancora
+pushato/PR** — in attesa dell'ok.
+
+**Prima, sanity-check del deploy (tutto verde)**
+- `https://docs.alum-lab.com/api/health` → **HTTP 200**, TLS valido, IP `84.247.128.81`, body con gli
+  engine TeX (`pdflatex/xelatex/lualatex`) → gira l'immagine reale, non il node minimale.
+- DNS: **SPF ora c'è ed è corretto** (`v=spf1 include:spf.privateemail.com ~all`) — il follow-up SPF si
+  è risolto; **DMARC** `p=none` con report; A record e MX privateemail coerenti. Il buco deliverability
+  dei magic-link è chiuso.
+
+**Cosa c'è ora (nei 2 commit)**
+- **Build riproducibile** (`e89e1bc`): `package-lock.json` rigenerato (`nodemailer` era **assente** dal
+  lock) e in sync; Dockerfile passa da `npm install` a **`npm ci --omit=dev`** (copia anche il lock).
+- **`nodemailer` ^6.9.14 → ^9.0.3** (stesso commit): chiude **8 advisory high** (CRLF/SMTP-injection,
+  SSRF via raw/file) sul percorso dei magic-link; `npm audit --omit=dev` → **0 vulnerabilità**. L'uso in
+  `server.js` è l'API core (`createTransport` + `sendMail{from,to,subject,text}`), invariata 6→9 (il
+  breaking di 9.x è solo Node ≥18; giriamo su 22).
+- **Config edge versionata** (`dfc7442`): nuovo **`Caddyfile.alum-edge`** = copia di RIFERIMENTO del
+  vhost realmente in prod (`reverse_proxy alumere:3000`, WS `/collab`, redazione `token` nei log). Fonte
+  di verità resta `/opt/alum/caddy/Caddyfile` sul VPS.
+- **`DEPLOY.md`**: distingue le **due modalità** (A standalone `prod` vs B integrazione col Caddy edge =
+  quella live), nuova sezione "Deploy reale ALUM" con avvio `docker-compose.alum.yml` + **backup del
+  volume corretto** (`alumere_alumere-data`, non `alumdocs_…`); rimossa la nota "build riproducibile
+  opzionale" (ora è il default). **README**: file-tree aggiornato con i file dello stack alum.
+
+**Verificato (Docker in locale, host non toccato)**
+- Layer npm in un `docker build` **reale** (context = repo): `COPY` lock + `npm ci` verdi, `require()`
+  runtime OK, `node --check server.js` OK, **dry `sendMail`** con la shape reale (jsonTransport) → messaggio
+  corretto con nodemailer 9.
+- `caddy validate` su **`Caddyfile.alum-edge`** e sul `./Caddyfile` prod → entrambi "Valid configuration".
+
+**Prossimo**: push del branch + PR (in attesa dell'ok). Resta operativo solo **lanciare davvero il backup**
+del volume sul VPS (comando pronto in `DEPLOY.md`) e valutare il backup/versioning dell'intera
+`/opt/alum/caddy/`.
+
+---
+
 ## 2026-07-12 (sera) — Deploy reale su VPS ALUM: fatto, integrato col Caddy edge ✅
 
 App **live su `https://docs.alum-lab.com`**, dietro il Caddy edge già presente sul VPS. Deploy con Claude Code sul server (utente `albertoboffi`), dir `/opt/alum/alumere` (convenzione `/opt/alum/<servizio>`).
