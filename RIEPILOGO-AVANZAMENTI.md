@@ -7,6 +7,29 @@
 
 ---
 
+## 2026-07-12 (sera) — Deploy reale su VPS ALUM: fatto, integrato col Caddy edge ✅
+
+App **live su `https://docs.alum-lab.com`**, dietro il Caddy edge già presente sul VPS. Deploy con Claude Code sul server (utente `albertoboffi`), dir `/opt/alum/alumere` (convenzione `/opt/alum/<servizio>`).
+
+**⚠️ Correzione all'handoff precedente**
+L'handoff proponeva `app` su `127.0.0.1:3000:3000` + `reverse_proxy localhost:3000`. Sbagliato per QUESTO server: il Caddy del VPS è un **container** sulla rete `alum_web`, non un servizio host → da dentro il container `localhost:3000` è il Caddy stesso, non l'app. Integrazione corretta (uniforme con duit/maluS): app agganciata alla rete esterna condivisa **`alum_web`** con alias, Caddy che la raggiunge **per nome** con `reverse_proxy alumere:3000`. Nessun porto pubblicato sull'host.
+
+**Cosa c'è ora**
+- **`docker-compose.alum.yml`** (nuovo, versionato): solo servizio `app`, `expose: 3000` (niente porte host), `env_file: .env`, volume `alumere-data`, healthcheck via `node fetch /api/health`, su rete `alum_web` (external) con alias `alumere`. Nessun Caddy interno (quello di `prod` confliggerebbe su 80/443).
+- **Caddyfile edge** (`/opt/alum/caddy/Caddyfile`): nuovo vhost `docs.alum-lab.com` → `reverse_proxy alumere:3000`, `encode zstd gzip`, TLS automatico, WebSocket `/collab` passthrough. Aggiunta **redazione del `token` in query nei log** (il magic-link è `/api/auth/verify?token=…`), sul modello dei vhost `brain`. Reload con force-recreate (Caddyfile è bind-mount a file singolo).
+- **`.env` sul server** (mai committato): config decisa + segreti `SESSION_SECRET` (openssl) e `SMTP_PASS` (casella `tech@alum-lab.com`).
+
+**Email / DNS**
+- Record A `docs.alum-lab.com → 84.247.128.81` creato. DKIM e DMARC su `alum-lab.com` a posto.
+- **SPF da verificare/sistemare** su Namecheap: `v=spf1 include:spf.privateemail.com ~all` (un solo record SPF per dominio; se ne esiste già uno, fondere). Non blocca l'avvio, incide solo sulla deliverability dei magic-link.
+
+**Follow-up (non bloccanti)**
+- `package-lock.json` disallineato (`nodemailer` assente dal lock) → rigenerare + passare a `npm ci`.
+- Backup: i progetti vivono nel volume Docker **`alumere-data`** → includerlo nei backup.
+- Valutare versionare/backuppare `/opt/alum/caddy/` (config edge di 5 servizi, oggi solo sul VPS).
+
+---
+
 ## 2026-07-12 (pomeriggio) — Handoff deploy all'informatico + scoperta: Caddy già sul VPS ⚠️
 
 Preparazione al deploy reale: raccolti i valori d'ambiente e **verificato il server target dall'esterno**.
