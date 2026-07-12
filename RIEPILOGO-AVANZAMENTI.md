@@ -7,6 +7,45 @@
 
 ---
 
+## 2026-07-12 (pomeriggio) — Handoff deploy all'informatico + scoperta: Caddy già sul VPS ⚠️
+
+Preparazione al deploy reale: raccolti i valori d'ambiente e **verificato il server target dall'esterno**.
+Il deploy lo esegue **l'informatico** (ha chiesto di provarci lui). Codice già su `origin/main` (`5d00510`).
+
+**Target reale**
+- VPS `84.247.128.81` (Ubuntu, Docker + Compose pronti, porta SSH 22 aperta).
+- Dominio app: **`docs.alum-lab.com`** (sotto-dominio di `alum-lab.com`, già di proprietà). Record DNS
+  **A → 84.247.128.81 ancora da creare** (al momento del check non risolveva).
+
+**⚠️ Scoperta che cambia la procedura di `DEPLOY.md`**
+- Test dall'esterno: **sul VPS gira GIÀ un Caddy** (`:80` → `308` redirect a https con header `Server: Caddy`;
+  `:443` apre ma dà TLS *internal error* su SNI sconosciuto → Caddy con HTTPS automatico su vhost nominati,
+  verosimilmente serve già altri siti).
+- ⇒ **NON** lanciare lo stack intero `docker-compose.prod.yml`: il suo Caddy interno confliggerebbe sulle
+  porte 80/443 con quello esistente e non partirebbe.
+- **Via corretta = integrare col Caddy esistente**: avviare **solo** il servizio `app` pubblicato su
+  `127.0.0.1:3000` (aggiungere `ports: ["127.0.0.1:3000:3000"]` al servizio `app` e non avviare il servizio
+  `caddy`), poi nel Caddyfile esistente aggiungere:
+  ```
+  docs.alum-lab.com {
+      reverse_proxy localhost:3000
+  }
+  ```
+  Caddy fa da sé TLS + passthrough WebSocket di `/collab`. Da chiarire com'è gestito il Caddy esistente
+  (servizio systemd sull'host vs. container Docker).
+
+**Valori `.env` decisi** (config, non segreti): `PUBLIC_DOMAIN=docs.alum-lab.com`,
+`PUBLIC_BASE_URL=https://docs.alum-lab.com`, `ALLOWED_EMAIL_DOMAIN=alum-lab.com`, `COOKIE_SECURE=1`,
+`TRUST_PROXY=1`, `LOGIN_TOKEN_TTL_MIN=15`; SMTP **privateemail** (`SMTP_HOST=mail.privateemail.com`,
+`SMTP_PORT=465`, `SMTP_USER`/`SMTP_FROM=tech@alum-lab.com`).
+**Segreti (MAI committati)**: `SESSION_SECRET` (generare con `openssl rand -hex 32`) e `SMTP_PASS` (password
+della casella `tech@alum-lab.com`) → si scrivono **solo** nel `.env` sul server.
+
+**Prossimo**: creare il record DNS; l'informatico integra col Caddy esistente + `.env` sul server + avvio del
+solo `app`; poi test end-to-end (magic-link → mail → editor real-time in due schede).
+
+---
+
 ## 2026-07-12 — Deploy pubblico (M-sec Step 4): artefatti + verifica ✅
 
 Preparato tutto il necessario per aprire l'app su internet dietro HTTPS con l'auth magic-link. Al deploy
