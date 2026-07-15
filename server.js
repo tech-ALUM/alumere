@@ -125,13 +125,32 @@ function userFromEmail(raw) {
   return { id, name: displayNameFromEmail(email) };
 }
 
-// Pending magic-link tokens: single-use, short-lived, in memory. Unused tokens expire;
-// a restart just drops them (the user requests a new link) — no security impact.
+// Pending magic-link tokens: single-use and short-lived. Kept on disk inside PROJECTS_DIR
+// (the persisted volume) so a restart/redeploy doesn't silently invalidate the links already
+// sitting in people's inboxes. Same trust model as .session-secret, which already lives there;
+// entries are tiny, expire on their own, and are dropped the instant they're used. It's a
+// dotfile, and projects are only ever read from directories, so it's never seen as a project.
+const PENDING_FILE = path.join(PROJECTS_DIR, ".pending-logins.json");
 const pendingLogins = new Map();                            // token -> { user, exp }
+function persistPending() {
+  try {
+    mkdirSync(PROJECTS_DIR, { recursive: true });
+    writeFileSync(PENDING_FILE, JSON.stringify(Object.fromEntries(pendingLogins)), "utf8");
+  } catch (e) {
+    console.warn(`[alumere][auth] token pending non persistiti (${e.message}); restano in memoria`);
+  }
+}
 function prunePending() {
   const now = Date.now();
-  for (const [t, v] of pendingLogins) if (v.exp <= now) pendingLogins.delete(t);
+  let changed = false;
+  for (const [t, v] of pendingLogins) if (v.exp <= now) { pendingLogins.delete(t); changed = true; }
+  if (changed) persistPending();
 }
+try {                                                       // reload what's still valid after a restart
+  for (const [t, v] of Object.entries(JSON.parse(readFileSync(PENDING_FILE, "utf8")))) {
+    if (v && v.user && v.exp > Date.now()) pendingLogins.set(t, v);
+  }
+} catch {}
 // Rate limiting so /api/auth/request can't be turned into a mail cannon. We throttle
 // per-EMAIL (stops bombing one inbox) with a generous per-IP backstop — an office behind
 // NAT shares one public IP, so the per-IP cap must be loose. Only valid requests count.
@@ -161,6 +180,11 @@ async function mailTransport() {
   }
   return _transport;
 }
+// Shared by the login email and the two auth pages below: same face as the app (styles.css).
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const AUTH_FONT = "Inter,'Helvetica Neue',-apple-system,'Segoe UI',Arial,sans-serif";
+
 async function sendLoginLink(email, link) {
   const minutes = Math.round(LOGIN_TOKEN_TTL_MS / 60000);
   const t = await mailTransport();
@@ -168,13 +192,29 @@ async function sendLoginLink(email, link) {
     console.log(`[alumere][auth] (SMTP off) login link per ${email}:\n  ${link}`);
     return;
   }
+  const safe = escapeHtml(link);
   await t.sendMail({
     from: SMTP_FROM, to: email,
     subject: "Accesso ad Alumère",
+    // Both parts on purpose. The link is ~90 chars, and plain-text mail gets wrapped around 76:
+    // some clients then linkify only up to the wrap, so the token arrives TRUNCATED and the user
+    // gets "link non valido". In the HTML part the URL lives in the href attribute, where no
+    // amount of visual wrapping can break it; the angle brackets do the same job for the text
+    // fallback (RFC 3986's delimiter convention), plus a copy-pasteable copy for the stubborn ones.
     text:
       `Apri questo link per accedere ad Alumère (scade tra ${minutes} minuti).\n` +
-      `Aprilo dal dispositivo su cui vuoi entrare:\n\n${link}\n\n` +
+      `Aprilo dal dispositivo su cui vuoi entrare:\n\n<${link}>\n\n` +
       `Se non hai richiesto tu l'accesso, ignora pure questa mail.`,
+    html:
+      `<div style="font-family:${AUTH_FONT};font-size:15px;line-height:1.5;color:#243240">` +
+      `<p>Apri questo link per accedere ad Alumère (scade tra ${minutes} minuti).<br>` +
+      `Aprilo dal dispositivo su cui vuoi entrare.</p>` +
+      `<p><a href="${safe}" style="display:inline-block;padding:.6rem 1.4rem;background:#7eb0d5;` +
+      `color:#103049;font-weight:600;text-decoration:none;border-radius:8px">Accedi ad Alumère</a></p>` +
+      `<p style="color:#6b7785;font-size:13px">Se il bottone non funziona, copia e incolla questo indirizzo:<br>` +
+      `<span style="word-break:break-all">${safe}</span></p>` +
+      `<p style="color:#6b7785;font-size:13px">Se non hai richiesto tu l'accesso, ignora pure questa mail.</p>` +
+      `</div>`,
   });
 }
 function signSession(user) {
@@ -286,31 +326,72 @@ app.post("/api/auth/request", async (req, res) => {
   prunePending();
   const token = crypto.randomBytes(32).toString("base64url");
   pendingLogins.set(token, { user, exp: Date.now() + LOGIN_TOKEN_TTL_MS });
+  persistPending();
   const base = PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
   const link = `${base}/api/auth/verify?token=${token}`;
   try {
     await sendLoginLink(user.id, link);
   } catch (e) {
     pendingLogins.delete(token);
+    persistPending();
     console.error(`[alumere][auth] invio mail fallito: ${e.message}`);
     return res.status(502).json({ ok: false, error: "Invio della mail non riuscito, riprova." });
   }
   res.json({ ok: true, email: user.id });                  // generic — the client shows "controlla la posta"
 });
 
-// Login, step 2: the emailed link lands here → consume the token, set the session, enter.
+// Chrome shared by the two little auth pages below. These are served straight from here
+// (no public/styles.css) so they keep working even if the static assets don't, hence the
+// inline styles — the values mirror styles.css (--panel-2 / --panel / --ink / --muted /
+// --accent) so the pages still look like Alumère. Background and color-scheme are declared
+// explicitly on purpose: with no background a dark-mode browser darkens the default canvas
+// and this dark-on-light text turns unreadable.
+const authPage = (title, body) =>
+  `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
+  `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+  `<meta name="color-scheme" content="light">` +
+  `<meta name="robots" content="noindex">` +
+  `<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;` +
+  `background:#f5f7fa;color:#243240;font-family:${AUTH_FONT};line-height:1.5">` +
+  `<main style="max-width:26rem;margin:1.5rem;padding:2rem 2.25rem;text-align:center;` +
+  `background:#fff;border:1px solid #e4e8ee;border-radius:12px">${body}</main>`;
+const invalidLinkPage = () => authPage("Link non valido",
+  `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Link non valido o scaduto</h2>` +
+  `<p style="margin:0 0 1.25rem;color:#6b7785">Richiedi un nuovo accesso.</p>` +
+  `<p style="margin:0"><a href="/" style="color:#5f9bc9">Torna ad Alumère</a></p>`);
+
+// Login, step 2a: the emailed link lands HERE — and deliberately does NOT consume the token.
+// Anything in the mail's path may fetch the URL before the human does (corporate link scanners,
+// antivirus, proxies, link-preview bots); with a single-use token, a bot's GET burns it and the
+// real person then hits "link non valido". That's exactly what office PCs were seeing. So the GET
+// only renders a confirm page, and the token is spent by the POST below, behind a real click.
 app.get("/api/auth/verify", (req, res) => {
   prunePending();
   const token = String(req.query.token || "");
   const pend = token ? pendingLogins.get(token) : null;
-  if (!pend || pend.exp <= Date.now()) {
-    return res.status(400).type("html").send(
-      `<!doctype html><meta charset="utf-8"><title>Link non valido</title>` +
-      `<div style="font-family:system-ui;max-width:28rem;margin:4rem auto;text-align:center">` +
-      `<h2>Link non valido o scaduto</h2><p>Richiedi un nuovo accesso.</p>` +
-      `<p><a href="/">Torna ad Alumère</a></p></div>`);
-  }
+  if (!pend || pend.exp <= Date.now()) return res.status(400).type("html").send(invalidLinkPage());
+  // Note: no JS auto-submit here on purpose — a scanner that executes scripts would burn the
+  // token again, putting us right back where we started. It has to be a human click.
+  return res.type("html").send(authPage("Conferma accesso",
+    `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Accedi ad Alumère</h2>` +
+    `<p style="margin:0 0 1.5rem">Stai per entrare come <strong>${escapeHtml(pend.user.name)}</strong><br>` +
+    `<span style="color:#6b7785;font-size:.9em">${escapeHtml(pend.user.id)}</span></p>` +
+    `<form method="post" action="/api/auth/verify?token=${encodeURIComponent(token)}">` +
+    `<button type="submit" style="font:inherit;font-weight:600;padding:.6rem 1.4rem;` +
+    `background:#7eb0d5;color:#103049;border:1px solid #7eb0d5;border-radius:8px;cursor:pointer">` +
+    `Conferma l'accesso</button></form>`));
+});
+
+// Login, step 2b: the confirm button lands here → consume the token, set the session, enter.
+// The token rides in the query string (the form carries no fields, and only express.json() is
+// mounted); Caddy already redacts `token` from the access logs.
+app.post("/api/auth/verify", (req, res) => {
+  prunePending();
+  const token = String(req.query.token || "");
+  const pend = token ? pendingLogins.get(token) : null;
+  if (!pend || pend.exp <= Date.now()) return res.status(400).type("html").send(invalidLinkPage());
   pendingLogins.delete(token);                             // single-use
+  persistPending();
   res.cookie(COOKIE_NAME, signSession(pend.user), {
     httpOnly: true, sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_MS, secure: COOKIE_SECURE,
   });
