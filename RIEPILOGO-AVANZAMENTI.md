@@ -7,6 +7,67 @@
 
 ---
 
+## 2026-07-16 — M1 Step 2: presenze con avatar + pulizia UX post-Yjs ✅
+
+Il polish della collaborazione. **Nessuna funzionalità nuova**: rende leggibile e onesto quello che
+l'app già faceva. Solo 3 file client (`app.js`, `editor.html`, `styles.css`) → **niente dipendenze
+nuove, niente rebuild del bundle né dell'immagine**: basta un reload.
+
+Fatti i punti **1 + 2**; il **3** (riconnessione) trattato come verifica + UI più esplicita; il **4**
+(condivisione cartelle vuote) **lasciato aperto** di proposito, è il meno utile.
+
+**Cosa c'è ora**
+- **Avatar tondo con le iniziali** (`tommaso.panseri@` → **TP**), **colorato come il cursore** di quella
+  persona → lo strip fa anche da **legenda** per i caret colorati nel testo. Hover → nome esteso
+  (tooltip CSS in barra; `title` nativo nell'albero, dove lo scroller lo taglierebbe).
+  **Pronto per la foto profilo**: `avatarEl()` ha già il ramo `<img>` — il giorno che si pubblica un
+  `avatarUrl` nelle awareness, l'immagine compare da sola in barra e nell'albero, componente invariato.
+- **Chi sta su quale file**: marcatori piccoli sulle righe dell'albero. I dati erano **già sul filo**
+  (`activeFile` pubblicato dal 2026-07-05), mancava solo disegnarli.
+- **Oltre 4 persone** → collasso in **"+N"**, che al hover elenca i nascosti.
+- **Via il Save fasullo**: il bottone non salvava niente (faceva lampeggiare una scritta) e `#dirtyDot`
+  era uno `<span>` vuoto mai riempito — relitti del modello pre-Yjs col PUT. Al loro posto un
+  **"salvataggio automatico"** che **si nasconde quando sei offline**, invece di mentire.
+- **Stato connessione da un solo punto** (`setConnState` → `body[data-conn]`): chip, barra offline,
+  hint e avatar non possono più contraddirsi. Online → il chip sparisce (gli avatar *sono* il segnale);
+  non-online → avatar ingrigiti (non sappiamo più chi c'è davvero).
+
+**Scelte (e perché)**
+- **Dedup per PERSONA, non per socket** (nuovo: `id` pubblicato nelle awareness). La stessa persona con
+  due schede compariva **due volte** — scoperto sul campo, era la scheda Safari aperta. La domanda è
+  "chi c'è", non "quante schede ha". ⚠️ Vale solo fra client sul codice nuovo: chi ha una scheda vecchia
+  aperta si vede ancora doppio finché non ricarica.
+- **`activeFiles` è un Set**: due schede possono stare su due file diversi → la persona si vede su
+  **entrambi**; sceglierne uno sarebbe arbitrario.
+- **Offline misurato a TEMPO, non da evento** (`OFFLINE_GRACE_MS = 5000`). Hocuspocus riprova da solo e
+  resta in `"connecting"` per sempre: non esiste uno stato "disconnesso" da leggere → **la barra non
+  sarebbe mai comparsa a nessuno**. Sotto la soglia (blip, o il nostro redeploy) si tace; sopra, si
+  parla. Una volta accesa resta accesa fino al sync vero, o sfarfallerebbe a ogni retry.
+- **Barra offline arancione, non rossa**: non è un errore né perdita di dati — il CRDT fa il merge al
+  rientro. Il testo dice esattamente quello.
+- **Redraw filtrato per firma**: awareness scatta a ogni movimento di cursore (= ogni tasto di ognuno).
+  Ridisegnare strip+albero a quel ritmo era spreco e toglieva l'hover da sotto il mouse.
+- **Avatar sovrapposti** (stile Google Docs) + tetto a 4: a 26px in fila occupavano 181px e
+  **schiacciavano la barra** → "Recompile"/"Download PDF" andavano a capo *dentro* il bottone. Ora 110px
+  (e il chip online sparisce: saldo netto +26px, ci stanno con 14px di margine a 1280).
+
+**Verificato** (dev container, host non toccato; peer veri via ws autenticato col cookie)
+- **Iniziali 10/10** contro la derivazione reale di `displayNameFromEmail`: TP, MR, **"Maria Del Carmen"
+  → MC**, **`admin@` → AA**, più input degeneri (`""`/`null` → `?`). MC e AA riconfermate a schermo.
+- **5 colleghi veri** collegati insieme + la scheda Safari: dedup provata (**7 entry grezze → 4 avatar +
+  "+3"**, e Paolo con 2 sessioni resta **un** avatar ma appare su **entrambi** i suoi file); tooltip
+  "Paolo Rossi" confermato in browser.
+- **Offline**: barra **compare** su caduta vera (`docker stop`); **non compare** su riavvio breve del
+  server (`node --watch`) ← il caso del redeploy. **Riconnessione**: pagina sopravvissuta al riavvio
+  **senza reload** e presenze tornate da sole, incluso un peer entrato *dopo*.
+- **Zero ridisegni dell'albero** su 31 caratteri battuti (filtro per firma). Console pulita.
+  Progetto "Sample paper" **verificato intatto sul disco** dopo i test.
+
+**Prossimo**: M2 (history vera su log Yjs) o sicurezza giro 2 (allowlist per-persona, ACL per-progetto).
+⚠️ **Non è live**: come sempre serve il pull+rebuild sul VPS, che fa Albi.
+
+---
+
 ## 2026-07-15 (dopo i primi test sul campo) — Magic-link: fix scanner + troncamento ✅
 
 Primi test reali sul server, in più persone.
