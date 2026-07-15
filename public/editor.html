@@ -27,11 +27,11 @@
         Theme
         <select id="editorTheme" title="Editor colour palette"></select>
       </label>
-      <button id="save" class="btn" title="Le modifiche si salvano da sole in tempo reale">Save</button>
       <button id="recompile" class="btn primary" title="Recompile (Ctrl/Cmd+S compila)">
         <span class="ic">▶</span> Recompile
       </button>
       <button id="download" class="btn" title="Scarica il PDF compilato">Download PDF</button>
+      <div id="presence" class="presence" aria-label="Chi è online su questo progetto"></div>
       <span id="collabState" class="status idle" title="Stato collaborazione real-time">…</span>
       <span id="status" class="status idle">Ready</span>
     </div>
@@ -55,7 +55,13 @@
     <section class="pane editor">
       <div class="pane-head">
         <span id="openPath">main.tex</span>
-        <span class="muted small" id="dirtyDot"></span>
+        <span class="muted small" id="saveHint"
+              title="Le modifiche si salvano da sole, in tempo reale: non c'è nulla da premere.">salvataggio automatico</span>
+      </div>
+      <div id="offlineBar" class="offline-bar">
+        <span>⚠</span>
+        <span>Offline — in questo momento stai scrivendo solo per te.
+          Le modifiche non vanno perse: si sincronizzano da sole appena torni online.</span>
       </div>
       <div id="editor" class="editor-host"></div>
     </section>

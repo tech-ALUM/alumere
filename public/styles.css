@@ -46,6 +46,8 @@ button { font-family: inherit; cursor: pointer; }
   background: linear-gradient(180deg, #33485c, #283a4b);
   color: #eef4f9;
   border-bottom: 1px solid #1c2a37;
+  position: relative;   /* the presence tooltips hang below the bar, over the workspace */
+  z-index: 5;
 }
 .brand { display: flex; align-items: center; gap: 9px; }
 .logo {
@@ -71,6 +73,7 @@ button { font-family: inherit; cursor: pointer; }
 .btn {
   font-size: 13px; padding: 6px 12px; border-radius: 7px;
   border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08); color: #eef4f9;
+  white-space: nowrap; flex: 0 0 auto;   /* never let a crowded toolbar wrap a label mid-button */
 }
 .btn:hover { background: rgba(255,255,255,.16); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -84,6 +87,48 @@ button { font-family: inherit; cursor: pointer; }
 .status.busy { color: #5a3a06; background: var(--orange); }
 .status.ok   { color: #2a4209; background: var(--lime); }
 .status.err  { color: #5a1a10; background: var(--coral); }
+
+/* ---------- Presence (who is in the room) ---------- */
+/* The avatar is one component used at two sizes: the toolbar strip (who's on the project)
+   and small markers on tree rows (who's in which file). `--avatar-color` is the same colour
+   as that person's cursor, so the strip doubles as the legend for the carets in the text. */
+.presence { display: flex; align-items: center; flex: 0 0 auto; }
+.avatar {
+  position: relative; flex: 0 0 auto;
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--avatar-color, var(--accent));
+  color: #fff; font-size: 10.5px; font-weight: 700;
+  text-transform: none; letter-spacing: 0; user-select: none;
+}
+.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.avatar-more { background: #46586a; font-weight: 600; }
+/* The strip overlaps like a stack of chips: the toolbar is already crowded, and at 26px a
+   row of them was wide enough to squeeze the buttons into wrapping their labels. The ring is
+   the topbar's own colour (opaque, or the overlap would show through); renderPresence sets a
+   descending z-index so the stack reads left-over-right and "me" stays on top. */
+.presence .avatar { box-shadow: 0 0 0 2px #2d4153; }
+.presence .avatar + .avatar { margin-left: -5px; }   /* just the rings: more and the initials clip */
+.presence .avatar.is-me { box-shadow: 0 0 0 2px #2d4153, 0 0 0 3.5px rgba(255,255,255,.65); }
+/* Hover → the full name. Only in the toolbar: on a tree row this would be clipped by the
+   scroller, so those avatars carry a native title= instead (see avatarEl). */
+.presence .avatar::after {
+  content: attr(data-name);
+  position: absolute; top: calc(100% + 7px); left: 50%; transform: translateX(-50%);
+  background: #10202c; color: #eef4f9;
+  font-size: 11px; font-weight: 500; white-space: nowrap;
+  padding: 4px 8px; border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.3);
+  opacity: 0; pointer-events: none; transition: opacity .12s ease;
+}
+.presence .avatar:hover::after { opacity: 1; }
+
+/* Connection state drives the whole UI from one attribute (see setConnState). While we are
+   not online the avatars are stale — we have no idea who is still there — so they grey out,
+   and the "salvataggio automatico" hint has to stop claiming something that isn't true. */
+body[data-conn="online"] #collabState { display: none; }
+body:not([data-conn="online"]) .presence { opacity: .4; filter: grayscale(1); }
+body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 
 /* ---------- Workspace ---------- */
 .workspace {
@@ -126,6 +171,10 @@ button { font-family: inherit; cursor: pointer; }
 .twisty { width: 12px; font-size: 10px; color: var(--muted); text-align: center; }
 .rowicon { width: 15px; text-align: center; color: var(--accent-d); }
 .rowname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rowpeers { display: flex; gap: 3px; flex: 0 0 auto; }
+/* No overlap here: a tree row sits on three different backgrounds (plain / hover / active),
+   so there is no single opaque ring colour to hide the seam with. */
+.avatar-sm { width: 17px; height: 17px; font-size: 8px; box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
 .rowactions { display: none; gap: 2px; }
 .row:hover .rowactions { display: flex; }
 .rowactions button {
@@ -136,6 +185,16 @@ button { font-family: inherit; cursor: pointer; }
 .files-hint { font-size: 10.5px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); }
 
 /* ---------- Editor ---------- */
+/* Losing the socket is not an error and not data loss — the CRDT merges the backlog on
+   reconnect — so this warns in orange rather than red, and says exactly that. Only shown
+   for data-conn="offline": "connecting" is the normal state on every page load. */
+.offline-bar {
+  display: none; align-items: flex-start; gap: 8px;
+  padding: 7px 12px; font-size: 12px; line-height: 1.4;
+  background: var(--orange); color: #5a3a06;
+  border-bottom: 1px solid rgba(0,0,0,.12);
+}
+body[data-conn="offline"] .offline-bar { display: flex; }
 .editor-host { flex: 1; min-height: 0; overflow: hidden; }
 .cm-editor { height: 100%; font-size: 13.5px; }
 .cm-editor .cm-scroller { font-family: var(--mono); line-height: 1.55; }

@@ -92,7 +92,7 @@ function colorFor(seed) {
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
-const openPathEl = $("openPath");
+const openPathEl = $("openPath"), presenceEl = $("presence");
 const pdfFrame = $("pdf"), logEl = $("log"), previewEmpty = $("previewEmpty");
 const engineSel = $("engine");
 
@@ -202,8 +202,18 @@ function iconFor(node, open) {
   return "📃";
 }
 
+// Where everyone else is right now, recomputed per render (see peerList / onAwarenessChange).
+let peersByFile = new Map();      // path -> peers sitting in that file
 function renderTree() {
   if (!treeEl) return;
+  peersByFile = new Map();
+  for (const p of peerList()) {
+    if (p.isMe) continue;                     // my own row already reads as `.active`
+    for (const f of p.activeFiles) {
+      if (!peersByFile.has(f)) peersByFile.set(f, []);
+      peersByFile.get(f).push(p);
+    }
+  }
   treeEl.innerHTML = "";
   treeEl.appendChild(buildList(buildTreeModel()));
 }
@@ -226,7 +236,15 @@ function buildList(list) {
     const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rename";
     const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Delete";
     actions.append(renameBtn, delBtn);
-    row.append(tw, ic, nm, actions);
+    row.append(tw, ic, nm);
+    const here = node.type === "file" ? peersByFile.get(node.path) : null;
+    if (here) {
+      const marks = document.createElement("span");
+      marks.className = "rowpeers";
+      for (const p of here.slice(0, 3)) marks.appendChild(avatarEl(p, { small: true }));
+      row.appendChild(marks);
+    }
+    row.appendChild(actions);
     li.appendChild(row);
     row.addEventListener("click", (e) => {
       if (e.target === renameBtn || e.target === delBtn) return;
@@ -494,23 +512,153 @@ function errorScreen(msg) {
 }
 
 // ---------- Real-time connection status + presence ----------
-function setCollab(text, kind) { if (collabEl) { collabEl.textContent = text; collabEl.className = "status " + (kind || "idle"); } }
-function renderPresence() {
-  let n = 1;
-  try { n = provider.awareness.getStates().size || 1; } catch {}
-  setCollab(`● ${n} online`, "ok");
+// Peers publish { user:{id,name,color}, activeFile } into awareness (see init + openFile);
+// this is the read side. yCollab already draws named cursors INSIDE the open file, so what
+// these avatars add is everything you can't see from there: who else is on the project at
+// all, and which file each of them is sitting in.
+const MAX_AVATARS = 4;             // the toolbar is a single row — past this we collapse into "+N"
+
+// "Tommaso Panseri" → "TP". Display names arrive derived from the email, so mirror the word
+// rules the server used to build them (displayNameFromEmail): a capital mid-word is a break
+// ("AdminAccount" → "AA"), and 3+ words take first+last ("Maria Del Carmen" → "MC").
+function initialsOf(name) {
+  const words = String(name || "")
+    .split(/[\s._-]+/)
+    .flatMap((w) => w.split(/(?<=[a-z])(?=[A-Z])/))
+    .filter((w) => /^\p{L}/u.test(w));
+  if (!words.length) return "?";
+  return (words[0][0] + (words.length > 1 ? words[words.length - 1][0] : "")).toUpperCase();
 }
+
+// The avatar, built in ONE place: initials today, profile photo the day there is one. When
+// `avatarUrl` starts being published in awareness, the <img> branch lights up everywhere
+// (toolbar + tree) and nothing else has to change.
+function avatarEl(user, { small = false } = {}) {
+  const el = document.createElement("span");
+  el.className = "avatar" + (small ? " avatar-sm" : "") + (user.isMe ? " is-me" : "");
+  el.style.setProperty("--avatar-color", user.color || "var(--accent)");
+  const label = user.name + (user.isMe ? " (tu)" : "");
+  el.dataset.name = label;
+  el.setAttribute("aria-label", label);
+  if (small) el.title = label;     // tree rows sit in a scroller: a CSS tip would be clipped
+  if (user.avatarUrl) {
+    const img = document.createElement("img");
+    img.src = user.avatarUrl; img.alt = "";
+    el.appendChild(img);
+  } else {
+    el.textContent = initialsOf(user.name);
+  }
+  return el;
+}
+
+// Everyone in this project's room: me first, then by name — a stable order, so the strip
+// doesn't reshuffle itself while people move around.
+// Keyed by PERSON, not by socket: awareness holds one entry per tab, so someone with the
+// project open twice (laptop + desktop, or just a stray tab) would otherwise show up as two
+// identical avatars. The question this strip answers is "who is here", so tabs collapse.
+function peerList() {
+  if (!provider) return [];
+  const myClientId = provider.awareness.clientID;
+  const byPerson = new Map();
+  for (const [clientId, st] of provider.awareness.getStates()) {
+    const u = st && st.user;
+    if (!u || !u.name) continue;             // a peer mid-handshake has no user field yet
+    const isMe = clientId === myClientId;
+    const key = u.id || `client:${clientId}`;   // pre-id clients (or none) stay per-socket
+    const prev = byPerson.get(key);
+    if (prev) {
+      prev.isMe = prev.isMe || isMe;         // any tab of mine makes the person "me"
+      if (st.activeFile) prev.activeFiles.add(st.activeFile);
+      continue;
+    }
+    // activeFiles is a set, not one path: two tabs can sit in two different files, and
+    // "Paolo has intro.tex and math.tex open" is the honest answer — picking one would
+    // just be arbitrary.
+    byPerson.set(key, {
+      key, name: u.name, color: u.color, avatarUrl: u.avatarUrl || null,
+      activeFiles: new Set(st.activeFile ? [st.activeFile] : []), isMe,
+    });
+  }
+  const out = [...byPerson.values()];
+  out.sort((a, b) => (a.isMe !== b.isMe ? (a.isMe ? -1 : 1) : a.name.localeCompare(b.name)));
+  return out;
+}
+
+// awareness fires on every remote CURSOR move — i.e. on every keystroke of every peer. Redrawing
+// the strip and the whole tree at that rate would be wasteful and would drop hover states from
+// under the mouse, so redraw only when the part we actually display has changed.
+let presenceSig = "";
+function onAwarenessChange() {
+  if (!booted) return;
+  const peers = peerList();
+  const sig = peers.map((p) =>
+    `${p.key}:${p.name}:${p.color}:${p.avatarUrl}:${[...p.activeFiles].sort().join(",")}`).join("|");
+  if (sig === presenceSig) return;
+  presenceSig = sig;
+  renderPresence(peers);
+  renderTree();                              // file rows carry "who's in here" markers
+}
+function renderPresence(peers = peerList()) {
+  if (!presenceEl) return;
+  presenceEl.innerHTML = "";
+  const shown = peers.slice(0, MAX_AVATARS);
+  shown.forEach((p, i) => {
+    const el = avatarEl(p);
+    el.style.zIndex = String(MAX_AVATARS + 1 - i);   // the overlapping stack reads left-over-right
+    presenceEl.appendChild(el);
+  });
+  const extra = peers.slice(MAX_AVATARS);
+  if (extra.length) {
+    const more = document.createElement("span");
+    more.className = "avatar avatar-more";
+    more.textContent = "+" + extra.length;
+    more.dataset.name = extra.map((p) => p.name).join(", ");   // the hidden ones are still nameable
+    more.setAttribute("aria-label", more.dataset.name);
+    presenceEl.appendChild(more);
+  }
+}
+
+// One owner for "how connected am I", so the toolbar chip, the offline banner and the
+// auto-save hint can never contradict each other (CSS keys off body[data-conn]).
+function setConnState(state, text) {   // "online" | "connecting" | "offline" | "broken"
+  document.body.dataset.conn = state;
+  if (!collabEl) return;
+  collabEl.textContent = text;
+  collabEl.className = "status " + (state === "online" ? "ok" : state === "connecting" ? "busy" : "err");
+}
+
+// Hocuspocus retries on its own and reports "connecting" the whole time it does — it never
+// sits in a "disconnected" state to read. So losing the socket must be measured in TIME, not
+// taken from an event: a blip (or a server restart) recovers in a second and deserves no
+// alarm, while a real outage has to be said out loud. Escalate only if we're still not synced
+// after the grace period; once loud, stay loud until an actual sync, or the banner would
+// flap in and out on every retry.
+const OFFLINE_GRACE_MS = 5000;
+let offlineTimer = null;
+function noteNotSynced() {
+  if (document.body.dataset.conn === "offline") return;      // already loud
+  setConnState("connecting", "connessione…");
+  if (!offlineTimer) offlineTimer = setTimeout(() => {
+    offlineTimer = null;
+    setConnState("offline", "○ offline");
+  }, OFFLINE_GRACE_MS);
+}
+
 // Runs on every successful (re)sync; bootstraps the UI once the seeded files arrive.
 function onSynced() {
-  renderPresence();
-  if (booted) return;
-  booted = true;
-  renderTree();
-  const files = flattenForCompile();
-  const mainPath = detectMain(files);
-  if (hasPath(mainPath)) openFile(mainPath);
-  else if (files[0]) openFile(files[0].path);
-  compile();
+  if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
+  setConnState("online", "● online");
+  presenceSig = "";              // a reconnect may have emptied/changed the room → force one redraw
+  if (!booted) {
+    booted = true;
+    renderTree();
+    const files = flattenForCompile();
+    const mainPath = detectMain(files);
+    if (hasPath(mainPath)) openFile(mainPath);
+    else if (files[0]) openFile(files[0].path);
+    compile();
+  }
+  onAwarenessChange();           // booted by now, so this actually paints the strip + markers
 }
 
 // ---------- Load + wire up ----------
@@ -528,7 +676,7 @@ async function init() {
   initEditorTheme();
 
   if (!window.YCOLLAB) {
-    setCollab("collab non disponibile", "err");
+    setConnState("broken", "collab non disponibile");   // not "offline": nothing here will sync later
     editorHost.innerHTML = `<div style="padding:16px;font:13px/1.5 'Inter',sans-serif;color:#5a3a06;background:#fff3cd">Il bundle real-time (<code>window.YCOLLAB</code>) non è caricato. Ricostruisci <code>public/vendor/codemirror.js</code> con <code>npm run build:client</code> e ricarica.</div>`;
     return;
   }
@@ -543,22 +691,24 @@ async function init() {
   provider = new HocuspocusProvider({ url: `${wsProto}://${location.host}/collab`, name: PROJECT_ID, document: ydoc });
 
   const { color, colorLight } = colorFor(me.id || me.name || "anon");
-  provider.awareness.setLocalStateField("user", { name: me.name, color, colorLight });
+  // `id` is what lets peerList() collapse one person's several tabs into one avatar;
+  // name/color are also read by yCollab to label the remote carets in the text.
+  provider.awareness.setLocalStateField("user", { id: me.id, name: me.name, color, colorLight });
 
   filesMap.observe(onFilesChanged);
-  setCollab("connessione…", "busy");
-  provider.on("status", (e) => { if (e.status !== "connected") setCollab("○ " + e.status, "busy"); });
-  provider.on("disconnect", () => setCollab("○ offline", "err"));
+  noteNotSynced();
+  // "connected" is the socket, not the doc — only `synced` means we actually have everyone's
+  // work, so that's what flips us to online (see onSynced).
+  provider.on("status", (e) => { if (e.status !== "connected") noteNotSynced(); });
+  provider.on("disconnect", noteNotSynced);
   provider.on("synced", onSynced);
-  provider.awareness.on("change", () => { if (booted) renderPresence(); });
+  provider.awareness.on("change", onAwarenessChange);
 
   // Toolbar + layout (independent of sync).
   renderTree(); applyLayout(); setupSplitters();
   $("recompile").addEventListener("click", compile);
   $("newFile").addEventListener("click", newFile);
   $("newFolder").addEventListener("click", newFolder);
-  const saveBtn = $("save");
-  if (saveBtn) saveBtn.addEventListener("click", () => setStatus("ok", "Salvataggio automatico attivo ✓"));
   $("download").addEventListener("click", () => {
     if (!pdfBlob) return;
     const a = document.createElement("a");
