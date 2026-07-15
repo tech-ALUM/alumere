@@ -7,11 +7,50 @@
 
 ---
 
-## 2026-07-12 (notte) — Follow-up post-deploy chiusi: build riproducibile + config edge versionata ✅
+## 2026-07-15 (dopo i primi test sul campo) — Magic-link: fix scanner + troncamento ✅
+
+Primi test reali sul server, in più persone.
+- **Collaborazione real-time: funziona.** Provata in due (Tommy + Paolo), si scrive insieme senza attriti. ✅
+- **Magic-link: rotto per alcuni.** Il link andava dai **Mac** (Tommy, Paul, Fra) ma dava **"link non
+  valido"** dal PC di lavoro (**Windows**) e da quello di Albi (**Linux**). Sembrava un problema di OS:
+  **non lo è** — una GET con token in query è identica ovunque. La variabile vera è il **client di posta
+  e la rete** attorno al link.
+
+**Diagnosi — due cause, entrambe reali**
+1. **Il token moriva al PRIMO GET, chiunque lo facesse** (`pendingLogins.delete` dentro la GET). Scanner
+   di sicurezza della posta, antivirus, proxy aziendali e bot di anteprima **aprono** gli URL trovati
+   nelle mail → bruciavano il token monouso → l'umano poi trovava "link non valido". Ecco perché
+   fallivano proprio i **PC aziendali**.
+2. **Mail solo `text/plain` + URL ~90 char.** Il quoted-printable lo spezza a 76 — visto sul filo:
+   `<http://127.0.0.=\r\n1:3100/api/auth/verify?token=…>` — e i client che linkificano male **troncano il
+   token**. Client diversi = macchine diverse → da lì la **falsa correlazione con l'OS**.
+
+**Cosa c'è ora** (`fca0d1a`)
+- **La GET non consuma più**: mostra una pagina **"Conferma l'accesso"**; il token è speso dalla **POST**
+  dietro un click vero (gli scanner fanno GET e non premono bottoni). **Niente auto-submit in JS**,
+  apposta: uno scanner che esegue script lo ribrucerebbe. Il token viaggia in query anche sulla POST →
+  già coperto dalla redazione nei log di Caddy.
+- **Mail multipart**: parte **HTML** con `<a href>` (l'URL sta in un attributo, dove nessun a-capo lo
+  rompe) + testo con l'URL fra `<>` e una copia copia-incollabile.
+- **Token pendenti persistiti** nel volume dati, stesso pattern del `.session-secret` → un riavvio non
+  invalida più i link già in casella. Chiude un follow-up in lista da tempo.
+- Le due paginette di auth erano **dark-mode-rotte** (testo scuro senza sfondo dichiarato → illeggibili):
+  ora dichiarano `background` + `color-scheme` e usano la palette di `styles.css`.
+
+**Verificato** (container isolati, **MailHog** come SMTP vero; host e server mai toccati) — **22/22**:
+mail con parte HTML e token **integro (43 char)** in entrambe le parti; **link aperto DUE volte** (prima
+"lo scanner", poi l'umano) e **la seconda funziona ancora** ← era esattamente il bug; POST monouso
+(la seconda → 400); link ancora valido dopo un `kill -9` dell'app; gate dominio / 401 / token inventato
+invariati. Più il giro in **browser vero**: click sul bottone → 302 → cookie HttpOnly → `/api/projects` 200.
+
+**⚠️ Non è ancora live**: serve il redeploy sul server (`git pull` + rebuild).
+
+---
+
+## 2026-07-15 — Follow-up post-deploy chiusi: build riproducibile + config edge versionata ✅
 
 Chiusi i follow-up non bloccanti lasciati aperti dal deploy, + sistemata una vulnerabilità high
-trovata strada facendo. Lavoro sul branch **`follow-up/deploy-hardening`** (2 commit), **non ancora
-pushato/PR** — in attesa dell'ok.
+trovata strada facendo. Mergiato in **`main`** in fast-forward e pushato (`9586cd5`).
 
 **Prima, sanity-check del deploy (tutto verde)**
 - `https://docs.alum-lab.com/api/health` → **HTTP 200**, TLS valido, IP `84.247.128.81`, body con gli
