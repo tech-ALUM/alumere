@@ -397,6 +397,7 @@ body[data-editor-theme="nord"]{
 .hist-title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
 .hist-title .ic { font-size: 15px; }
 .hist-title .muted { color: #9fb2c4; font-weight: 500; }
+.hist-head-actions { display: flex; gap: 8px; }
 .hist-main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 310px 1fr; }
 
 /* timeline */
@@ -469,6 +470,9 @@ body[data-editor-theme="nord"]{
 .dl.del { background: rgba(253, 127, 111, .16); }
 .dl.del .dls { color: #c0392b; }
 .dl.del .dlt { color: #7a3a33; }
+/* intra-line: the exact segment that changed, a shade deeper than its line */
+.dl.add .dlh { background: rgba(111, 174, 62, .38); border-radius: 2px; }
+.dl.del .dlh { background: rgba(253, 127, 111, .45); border-radius: 2px; }
 .dl.fold { display: block; grid-template-columns: none; text-align: center; font-style: italic; color: var(--muted); background: #f5f8fb; padding: 3px 0; border-block: 1px solid var(--line); }
 
 @media (max-width: 780px) {

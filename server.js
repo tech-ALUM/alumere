@@ -859,11 +859,23 @@ async function attachCollab(httpServer) {
     // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
     // version; we remember the last nonce we acted on in meta.json, so the flag needs no
     // clearing from the live doc (which would mean the server writing into the CRDT).
-    const brk = document.getMap(COLLAB_META_KEY).get("historyBreak");
-    const forceNew = brk != null && brk !== meta.lastHistoryBreak;
-    await recordVersion(documentName, files, meta.updatedBy || meta.createdBy || SYSTEM_USER, { forceNew })
+    // The break is { nonce, kind, label?, by? } — kind/label/by shape the forced version
+    // (a checkpoint is authored by whoever cut it, not by the last editor). Bare-string
+    // nonces from clients on older code still force a version, as before.
+    const brkRaw = document.getMap(COLLAB_META_KEY).get("historyBreak");
+    const brk = brkRaw == null ? null
+      : (typeof brkRaw === "object" ? brkRaw : { nonce: String(brkRaw) });
+    const forceNew = !!brk && brk.nonce != null && brk.nonce !== meta.lastHistoryBreak;
+    let vBy = meta.updatedBy || meta.createdBy || SYSTEM_USER;
+    const vOpts = { forceNew };
+    if (forceNew) {
+      vOpts.kind = brk.kind === "checkpoint" ? "checkpoint" : "restore";
+      if (typeof brk.label === "string" && brk.label.trim()) vOpts.label = brk.label.trim().slice(0, 120);
+      if (brk.by && brk.by.id && brk.by.name) vBy = { id: String(brk.by.id), name: String(brk.by.name) };
+    }
+    await recordVersion(documentName, files, vBy, vOpts)
       .catch((e) => console.warn(`[alumere] history record failed for "${documentName}": ${e.message}`));
-    if (forceNew) meta.lastHistoryBreak = brk;
+    if (forceNew) meta.lastHistoryBreak = brk.nonce;
     await writeMeta(documentName, meta);
     console.log(`[alumere] collab stored "${documentName}" (${files.length} files)`);
   }

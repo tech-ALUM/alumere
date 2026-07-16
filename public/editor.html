@@ -89,7 +89,10 @@
   <div id="historyOverlay" class="hist-overlay" hidden aria-hidden="true">
     <header class="hist-head">
       <div class="hist-title"><span class="ic">🕘</span> Cronologia <span class="muted" id="histProj"></span></div>
-      <button id="histClose" class="btn" title="Chiudi la cronologia (Esc)">✕ Chiudi</button>
+      <div class="hist-head-actions">
+        <button id="histCheckpoint" class="btn" title="Crea subito una versione con nome: un punto fermo che i salvataggi successivi non modificano">📌 Checkpoint</button>
+        <button id="histClose" class="btn" title="Chiudi la cronologia (Esc)">✕ Chiudi</button>
+      </div>
     </header>
     <div class="hist-main">
       <aside class="hist-list" id="histList" aria-label="Elenco versioni"></aside>

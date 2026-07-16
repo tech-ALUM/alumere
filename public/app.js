@@ -689,7 +689,7 @@ function authorUser(by) {
   const { color } = colorFor((by && by.id) || name || "system");
   return { name, color };
 }
-const KIND_BADGE = { initial: "stato iniziale", checkpoint: "ripristino" };
+const KIND_BADGE = { initial: "stato iniziale", restore: "ripristino", checkpoint: "checkpoint" };
 const escapeHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
 function openHistory() {
@@ -907,6 +907,45 @@ function lineDiff(a, b) {
   for (let k = n - e; k < n; k++) ops.push({ t: "ctx", s: a[k] });
   return ops;
 }
+// ---- intra-line highlight: inside a balanced del/add block, mark WHAT changed in each
+// line pair (word-level LCS), so a one-word edit doesn't read as a whole different line ----
+const diffTokens = (s) => s.match(/[\p{L}\p{N}_]+|\s+|./gu) || [];
+function intralineSegs(aLine, bLine) {
+  const ops = lineDiff(diffTokens(aLine), diffTokens(bLine));
+  let common = 0;
+  for (const op of ops) if (op.t === "ctx") common += op.s.length;
+  // Lines that share too little read better as plain del+add: highlighting nearly
+  // everything says less than highlighting nothing.
+  if (common / Math.max(aLine.length, bLine.length) < 0.3) return null;
+  const segs = { del: [], add: [] };
+  const push = (side, changed, text) => {
+    const last = segs[side][segs[side].length - 1];
+    if (last && last.changed === changed) last.text += text;
+    else segs[side].push({ changed, text });
+  };
+  for (const op of ops) {
+    if (op.t === "ctx") { push("del", false, op.s); push("add", false, op.s); }
+    else push(op.t, true, op.s);
+  }
+  return segs;
+}
+// Pair the − and + lines of each changed block in order (1st del ↔ 1st add, …) up to the
+// shorter side — the extra lines of an unbalanced block are plain additions/removals. A
+// mispaired couple (say a new line slipped in between) is harmless: intralineSegs refuses
+// pairs that share too little, and the pair just renders un-highlighted.
+function markIntraline(rows) {
+  for (let i = 0; i < rows.length;) {
+    if (rows[i].t === "ctx") { i++; continue; }
+    let j = i; while (j < rows.length && rows[j].t !== "ctx") j++;
+    const dels = [], adds = [];
+    for (let k = i; k < j; k++) (rows[k].t === "del" ? dels : adds).push(rows[k]);
+    for (let k = 0; k < Math.min(dels.length, adds.length); k++) {
+      const segs = intralineSegs(dels[k].s, adds[k].s);
+      if (segs) { dels[k].hl = segs.del; adds[k].hl = segs.add; }
+    }
+    i = j;
+  }
+}
 function renderDiff(beforeText, afterText) {
   if (beforeText === afterText) return `<div class="hist-placeholder">Nessuna differenza in questo file.</div>`;
   const ops = lineDiff(beforeText.split("\n"), afterText.split("\n"));
@@ -917,6 +956,7 @@ function renderDiff(beforeText, afterText) {
     if (op.t === "del") { oldN++; return { t: "del", o: oldN, n: null, s: op.s }; }
     newN++; return { t: "add", o: null, n: newN, s: op.s };
   });
+  markIntraline(rows);
   const KEEP = 3, MINFOLD = 8, out = [];
   for (let i = 0; i < rows.length;) {
     if (rows[i].t !== "ctx") { out.push(rows[i++]); continue; }
@@ -931,9 +971,12 @@ function renderDiff(beforeText, afterText) {
     i = j;
   }
   const sign = { ctx: " ", add: "+", del: "−" };
+  const lineHtml = (r) => r.hl
+    ? r.hl.map((sg) => sg.changed ? `<span class="dlh">${escapeHtml(sg.text)}</span>` : escapeHtml(sg.text)).join("")
+    : (escapeHtml(r.s) || "&nbsp;");
   const html = out.map((r) => r.t === "fold"
     ? `<div class="dl fold">⋯ ${r.count} righe invariate ⋯</div>`
-    : `<div class="dl ${r.t}"><span class="dln">${r.o ?? ""}</span><span class="dln">${r.n ?? ""}</span><span class="dls">${sign[r.t]}</span><span class="dlt">${escapeHtml(r.s) || "&nbsp;"}</span></div>`).join("");
+    : `<div class="dl ${r.t}"><span class="dln">${r.o ?? ""}</span><span class="dln">${r.n ?? ""}</span><span class="dls">${sign[r.t]}</span><span class="dlt">${lineHtml(r)}</span></div>`).join("");
   return `<div class="diff">${html}</div>`;
 }
 
@@ -960,8 +1003,7 @@ async function restoreVersion(version) {
   const target = new Map(tree.map((f) => [f.path, f]));
   // Bump the break nonce FIRST so the store triggered by this change is forced into a fresh,
   // non-amendable version — the state we're leaving is preserved as its own point in history.
-  const nonce = "r-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-  metaMap.set("historyBreak", nonce);
+  metaMap.set("historyBreak", { nonce: newBreakNonce(), kind: "restore" });
   ydoc.transact(() => {
     for (const [p, f] of target) {
       const existing = filesMap.get(p);
@@ -984,6 +1026,43 @@ async function restoreVersion(version) {
   closeHistory();
   setStatus("ok", "Ripristinato ✓");
   compile();                                       // reflect the restored content in the preview
+}
+
+const newBreakNonce = () => Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+// Manual checkpoint: cut a named, non-amendable version of the CURRENT doc state, now.
+// Same mechanism as restore — bump the break nonce in the shared meta map — but carrying
+// kind/label/author, so the server cuts it as a "checkpoint" by whoever clicked (the doc
+// content may be untouched, so the last EDITOR would be the wrong author). The version
+// itself is made by the debounced server store (~2s), hence the short poll to show it.
+async function checkpointNow() {
+  if (!booted || !filesMap) { alert("Attendi il caricamento del progetto prima di creare un checkpoint."); return; }
+  const label = prompt("Nome del checkpoint (opzionale):", "");
+  if (label === null) return;                      // cancelled
+  const btn = $("histCheckpoint");
+  const prevNewest = histVersions[0] ? histVersions[0].id : null;
+  metaMap.set("historyBreak", {
+    nonce: newBreakNonce(), kind: "checkpoint",
+    label: label.trim() || null, by: { id: me.id, name: me.name },
+  });
+  btn.disabled = true; btn.textContent = "📌 Creo il checkpoint…";
+  try {
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 1200));
+      let newest;
+      try { newest = ((await histJson(histApi(""))).versions || [])[0]; } catch { continue; }
+      if (newest && newest.kind === "checkpoint" && newest.id !== prevNewest) {
+        histSelId = newest.id;
+        if (!$("historyOverlay").hidden) await loadTimeline();
+        return;
+      }
+    }
+    // Offline or slow store: the nonce is already in the doc, so the checkpoint will be
+    // cut at the next successful save — nothing is lost, it just isn't visible yet.
+    alert("Il checkpoint non è ancora comparso: verrà creato al prossimo salvataggio (ad es. quando torni online).");
+  } finally {
+    btn.disabled = false; btn.textContent = "📌 Checkpoint";
+  }
 }
 
 // ---------- Load + wire up ----------
@@ -1043,6 +1122,7 @@ async function init() {
   $("tabLog").addEventListener("click", () => showTab("log"));
   $("history").addEventListener("click", openHistory);
   $("histClose").addEventListener("click", closeHistory);
+  $("histCheckpoint").addEventListener("click", checkpointNow);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
