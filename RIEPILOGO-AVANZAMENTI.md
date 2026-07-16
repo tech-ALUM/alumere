@@ -7,6 +7,54 @@
 
 ---
 
+## 2026-07-16 (sera) — Rifiniture history: diff intra-riga + checkpoint manuale ✅
+
+Le prime due rifiniture di M2 (le altre — GC blob orfani e retention — restano in lista). Tocca
+`server.js` (~10 righe nell'hook di store) + i 3 file client. **Niente dipendenze nuove**: reload e basta.
+
+**Cosa c'è ora**
+- **Diff intra-riga**: dentro una riga modificata si evidenzia (sfondo più acceso) **solo la parte
+  cambiata**, stile GitHub — cambi una parola e vedi la parola, non due righe intere rosse/verdi.
+  LCS a livello di **parola** dentro la coppia di righe, riusando il `lcsCore` già esistente.
+- **Checkpoint manuale**: bottone **📌 Checkpoint** nell'header della cronologia → chiede un nome
+  (opzionale) e taglia **subito** una versione dello stato corrente: **attribuita a chi clicca**
+  (non all'ultimo editor), **mai amendata** dai salvataggi successivi, badge "checkpoint" in timeline.
+- Bonus emerso strada facendo: i **ripristini** ora hanno kind/badge proprio ("ripristino", il client
+  lo prevedeva già ma il server non lo emetteva) e sono anch'essi **punti fermi non-amendabili**.
+
+**Scelte (e perché)**
+- **Il nonce `historyBreak` diventa un oggetto** `{nonce, kind, label?, by?}` (era una stringa): il
+  meccanismo del checkpoint È il nonce del ripristino — serviva solo dire al server *che tipo* di
+  versione forzata tagliare e per conto di chi. Retro-compatibile: un nonce stringa (client con
+  scheda vecchia aperta) forza ancora la versione come prima. Il server continua a **non scrivere
+  mai nel CRDT** (ricorda l'ultimo nonce in `meta.json`).
+- **Checkpoint via doc Yjs, non endpoint REST**: un endpoint leggerebbe `files/` su disco, che è
+  **indietro fino al debounce** (2-10s) rispetto al doc live → il checkpoint perderebbe le ultime
+  battute. Bumpare il nonce nel doc cattura lo stato vero; la versione compare al giro di store
+  (~2s, il client fa un piccolo poll e la mostra).
+- **Accoppiamento righe del diff in ordine** (1ª rossa ↔ 1ª verde, …) anche nei **blocchi
+  sbilanciati** — la prima versione accoppiava solo blocchi 1:1 e Tommy l'ha bucata subito sul
+  campo (1 riga modificata + 1 nuova sotto = blocco 1→2, niente evidenza). Una **soglia di
+  somiglianza** (≥30% di contenuto comune) scarta le coppie che non c'entrano: righe troppo diverse
+  restano rosso/verde pieno, che dice di più di un'evidenzia-tutto.
+
+**Verificato** (container isolato su :3100 + dati temporanei; dev e prod mai toccati)
+- **Headless 20/20** (2 utenti veri via magic-link, peer Yjs col cookie): checkpoint con/senza
+  etichetta; autore = chi clicca (B) e non l'ultimo editor (A); contenuto invariato → 0 file, blob
+  dedup; l'edit dopo il checkpoint apre una versione nuova (il checkpoint non si amenda) e quello
+  dopo ancora torna ad amendare; ripristino nuovo formato attribuito e badge-ato; nonce stringa
+  legacy forza ancora; etichetta a posteriori; gate 401.
+- **Browser reale** (login magic-link → editor): `Team`→`Squadra` evidenziati parola-per-parola nel
+  diff; flusso checkpoint completo (prompt → versione "ATTUALE · CHECKPOINT" con etichetta, autore
+  giusto, auto-selezionata, Ripristina disabilitato sull'attuale); **riverificato il caso sbilanciato
+  di Tommy** dopo il fix (blocco 1→2: parola evidenziata + riga nuova verde piena). Console pulita.
+
+**Prossimo**: GC periodico dei blob orfani + retention versioni vecchie (le due rifiniture rimaste),
+oppure sicurezza giro 2 (allowlist per-persona, ACL per-progetto). ⚠️ **Non è live**: serve il
+pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-16 — M2: history vera (timeline + diff + ripristino) ✅
 
 La cronologia stile Overleaf. Ogni salvataggio del doc Yjs registra una **versione**; nuovo pannello con
