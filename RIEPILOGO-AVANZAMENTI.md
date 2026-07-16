@@ -7,6 +7,79 @@
 
 ---
 
+## 2026-07-16 — M2: history vera (timeline + diff + ripristino) ✅
+
+La cronologia stile Overleaf. Ogni salvataggio del doc Yjs registra una **versione**; nuovo pannello con
+**timeline + autore + diff + ripristino**. Tocca `server.js` (storage + hook + endpoint) e i 3 file client
+(`app.js`, `editor.html`, `styles.css`). **Niente dipendenze nuove, niente cambio immagine Docker**: basta un reload.
+
+**La scelta di fondo (e perché snapshot su disco, non log Yjs)**
+Il diario indicava "history sul log Yjs", ma quel log oggi è **effimero**: il doc si ricostruisce dal disco a
+ogni `onLoadDocument` e si materializza allo store — non c'è nessun update-log Yjs persistito. Costruirci sopra
+la history vorrebbe dire **prima** persistere gli update (`gc:false` + compattazione, doc che cresce senza
+limiti) + plumbing snapshot/diff a basso livello per-`Y.Text`: il percorso più costoso e rischioso. Scelto
+invece lo **snapshot-per-salvataggio content-addressed su disco**: dà subito tutta la UX, resta *files-on-disk*,
+non tocca l'immagine né ri-architetta Yjs, e lascia aperta la via del log Yjs per dopo. (È la scelta che il
+diario stesso, più in basso, chiamava "giusta-dimensionata".)
+
+**Cosa c'è ora**
+- **Storage** (`server.js`), *fuori* da `files/` (che `writeFiles` fa `rm -rf`), sotto `history/`:
+  `objects/<sha256>` = byte grezzi dei file **deduplicati per contenuto**; `index.json` = lista versioni
+  `{id, at, by, label, kind, treeHash, files:[{path,sha,encoding?}]}`. Scritture **atomiche** (temp+rename);
+  un **lock per-progetto** serializza le read-modify-write dell'index (uno store e una POST etichetta non si
+  pestano i piedi).
+- **Aggancio a `onStoreDocument`**: lo stesso save debounced è il confine di versione. **Baseline** allo
+  `onLoadDocument` (lo stato iniziale su disco, la prima volta che il progetto si apre → `kind:"initial"`).
+- **Coalescing** per una timeline leggibile: una raffica di scrittura dello stesso autore **fonde**
+  nell'ultima versione (amend) finché non "si posa" (`HISTORY_COALESCE_MIN`, default 5′) o finché non cambia
+  l'autore. L'amend **prune i blob rimasti orfani**. Uno store senza modifiche reali è un no-op (dedup per `treeHash`).
+- **Ripristino sicuro**, fatto **dal client attraverso il doc Yjs** (non un write server su `files/`, che il
+  doc live sovrascriverebbe): il testo viene sostituito **in-place sul `Y.Text`** (delete+insert sullo stesso
+  tipo condiviso), così segue anche l'editor degli altri peer. Un **nonce `historyBreak`** nel meta-map
+  condiviso **forza una versione nuova, non-amendabile**, così lo stato *da cui* ripristini non viene mai
+  mangiato dal coalescing.
+- **Endpoint** (tutti gated `requireUser`): `GET …/history` (timeline), `…/history/:v` (file + stato
+  added/modified/removed vs precedente), `…/history/:v/file?path=&prev=1` (le due facce del diff),
+  `…/history/:v/tree` (albero per il ripristino), `POST …/history/:v/label` (milestone).
+- **UI**: pulsante **🕘 Cronologia** → overlay full-screen. Timeline con **avatar/colore riusati dalle
+  presenze** (l'autore in cronologia ha la stessa faccia/colore del suo cursore), badge
+  "stato iniziale"/"attuale"/etichetta. Diff **unificato** a due gutter con **fold** delle righe invariate
+  ("⋯ N righe invariate ⋯"); toggle *con la precedente / con la copia attuale*. Bottoni `Ripristina` + `Etichetta`.
+
+**Scelte (e perché)**
+- **Coalescing per autore+tempo**, non "una versione per store": lo store è debounced ogni 2-10s → la timeline
+  sarebbe illeggibile. L'amend tiene sempre l'ultima versione allineata allo stato più recente (uno *skip*
+  puro perderebbe il lavoro finale se l'attività si ferma a metà finestra).
+- **Content-addressed**: la maggior parte dei save tocca 1 file → un solo blob nuovo, il resto deduplicato
+  (misurato: 7 blob per 16 slot-file).
+- **Ripristino via nonce**, non un flag da azzerare: il server ricorda in `meta.json` l'ultimo nonce trattato
+  (`lastHistoryBreak`), così il flag non va mai ripulito dal doc — cioè **il server non scrive mai nel CRDT**.
+- **Orientamento del diff (fix da prova sul campo di Tommy)**: la versione selezionata è **sempre il lato
+  "dopo"**, in entrambi i confronti → verde = righe che questa versione *ha*, rosso = righe che *le mancano*.
+  Guardando lo *stato iniziale* "con la copia attuale", il testo aggiunto dopo esce in **rosso** (`− ciaooo`),
+  non in verde: il diff descrive la versione che guardi, ed è l'anteprima esatta di cosa farebbe *Ripristina*.
+  Prima usciva invertito (`+`), coi segni che cambiavano significato a seconda del toggle.
+
+**Verificato** (tutto in **isolamento** su :3100 + dir temporanea; il container di prod e il volume `alumere-data` mai toccati)
+- **Headless 22/22** (server reale, 2 utenti veri via magic-link, peer Yjs autenticati col cookie): baseline;
+  coalescing (2 edit stesso autore → **1** versione); **prune del blob orfanato dall'amend**; cambio autore →
+  **nuova** versione; diff (testo presente in "dopo", assente in "prima"); **ripristino stesso-autore/finestra
+  → il nonce forza una versione nuova e lo stato precedente resta in cronologia**; l'edit successivo torna ad
+  amendare (il nonce era il discriminante); etichette; dedup; gate **401** senza cookie.
+- **Browser reale** (login magic-link vero → editor): overlay, timeline con avatar colorati, diff col fold
+  "23 righe invariate", **ripristino end-to-end** (editor tornato allo stato iniziale, riga 1 senza il
+  commento) → cronologia passata a **3 versioni** (base + edit + ripristino), console pulita.
+- **Orientamento diff** (dopo il fix): riverificate in browser le tre direzioni — stato iniziale vs copia
+  attuale → `− ciaooo` rosso; attuale vs copia attuale → "Nessuna differenza"; attuale vs precedente →
+  `+ ciaooo` verde. Console pulita.
+
+**Prossimo**: eventuale diff intra-riga (livello carattere), "checkpoint manuale" (il nonce è già pronto), GC
+periodico dei blob orfani, retention delle versioni vecchie. Oppure sicurezza giro 2 (allowlist per-persona,
+ACL per-progetto). ⚠️ **Non è live**: come sempre serve il pull+rebuild sul VPS (lo fa Albi). Il dato `history/`
+vive dentro il volume `alumere-data`, quindi è **già coperto dal backup del volume**.
+
+---
+
 ## 2026-07-16 — M1 Step 2: presenze con avatar + pulizia UX post-Yjs ✅
 
 Il polish della collaborazione. **Nessuna funzionalità nuova**: rende leggibile e onesto quello che
