@@ -661,6 +661,331 @@ function onSynced() {
   onAwarenessChange();           // booted by now, so this actually paints the strip + markers
 }
 
+// ---------- History (M2): timeline · diff · restore ----------
+// The server records a version on each debounced save (content-addressed snapshots); this
+// is the read/act side. Restore goes THROUGH the live Yjs doc — we pull a version's tree and
+// replace the shared text in place — so every collaborator's editor follows and the change
+// persists via the normal store path (a server-side files/ write would just be overwritten).
+let histVersions = [];        // timeline (newest first), as returned by the API
+let histSelId = null;         // selected version id
+let histSelPath = null;       // selected file path within that version
+let histCompare = "prev";     // "prev" (what this version changed) | "current" (vs the working copy)
+
+const histApi = (suffix) => `/api/projects/${PROJECT_ID}/history${suffix}`;
+async function histJson(url, opts) {
+  const r = await fetch(url, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
+function fmtWhen(iso) {
+  try { return new Date(iso).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); }
+  catch { return iso; }
+}
+// History authors carry only {id,name}; derive the SAME cursor color the person has live,
+// so a face in the timeline matches their caret/avatar in the editor.
+function authorUser(by) {
+  const name = (by && by.name) || "Sconosciuto";
+  const { color } = colorFor((by && by.id) || name || "system");
+  return { name, color };
+}
+const KIND_BADGE = { initial: "stato iniziale", checkpoint: "ripristino" };
+const escapeHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function openHistory() {
+  const ov = $("historyOverlay");
+  ov.hidden = false; ov.setAttribute("aria-hidden", "false");
+  const pn = $("projName"); if ($("histProj")) $("histProj").textContent = pn ? pn.textContent : "";
+  loadTimeline();
+}
+function closeHistory() {
+  const ov = $("historyOverlay");
+  ov.hidden = true; ov.setAttribute("aria-hidden", "true");
+}
+
+async function loadTimeline() {
+  const list = $("histList");
+  list.innerHTML = `<div class="hist-loading">Carico la cronologia…</div>`;
+  try {
+    const d = await histJson(histApi(""));
+    histVersions = d.versions || [];
+  } catch (e) {
+    list.innerHTML = `<div class="hist-loading">Cronologia non disponibile.<br><span class="muted">${escapeHtml(e.message)}</span></div>`;
+    return;
+  }
+  if (!histVersions.length) {
+    list.innerHTML = `<div class="hist-loading">Ancora nessuna versione salvata.<br><span class="muted">Le versioni compaiono man mano che si scrive.</span></div>`;
+    return;
+  }
+  list.innerHTML = "";
+  histVersions.forEach((v, i) => {
+    const item = document.createElement("button");
+    item.className = "hist-item" + (v.id === histSelId ? " sel" : "");
+    item.type = "button";
+    const who = authorUser(v.by);
+    item.appendChild(avatarEl(who, { small: true }));
+    const body = document.createElement("div");
+    body.className = "hist-item-body";
+    const line1 = document.createElement("div");
+    line1.className = "hist-item-line";
+    const when = document.createElement("span");
+    when.className = "hist-when"; when.textContent = fmtWhen(v.at);
+    line1.appendChild(when);
+    if (i === 0) { const tag = document.createElement("span"); tag.className = "hist-tag now"; tag.textContent = "attuale"; line1.appendChild(tag); }
+    if (KIND_BADGE[v.kind]) { const tag = document.createElement("span"); tag.className = "hist-tag"; tag.textContent = KIND_BADGE[v.kind]; line1.appendChild(tag); }
+    body.appendChild(line1);
+    const line2 = document.createElement("div");
+    line2.className = "hist-item-sub muted";
+    line2.textContent = v.label ? v.label : `${who.name} · ${v.changed} ${v.changed === 1 ? "file" : "file"} modificat${v.changed === 1 ? "o" : "i"}`;
+    body.appendChild(line2);
+    item.appendChild(body);
+    item.addEventListener("click", () => selectVersion(v.id));
+    list.appendChild(item);
+  });
+  // Keep a selection alive across reloads; default to the newest.
+  const stillThere = histVersions.some((v) => v.id === histSelId);
+  selectVersion(stillThere ? histSelId : histVersions[0].id);
+}
+
+async function selectVersion(id) {
+  histSelId = id;
+  for (const el of $("histList").querySelectorAll(".hist-item")) el.classList.remove("sel");
+  const idx = histVersions.findIndex((v) => v.id === id);
+  const items = $("histList").querySelectorAll(".hist-item");
+  if (items[idx]) items[idx].classList.add("sel");
+  const detail = $("histDetail");
+  detail.innerHTML = `<div class="hist-placeholder">Carico la versione…</div>`;
+  let version;
+  try { version = (await histJson(histApi(`/${id}`))).version; }
+  catch (e) { detail.innerHTML = `<div class="hist-placeholder">Errore: ${escapeHtml(e.message)}</div>`; return; }
+  renderDetail(version, idx);
+}
+
+function renderDetail(version, idx) {
+  const detail = $("histDetail");
+  const who = authorUser(version.by);
+  const isNewest = idx === 0;
+  detail.innerHTML = "";
+
+  // Meta bar: who / when / label + actions.
+  const meta = document.createElement("div");
+  meta.className = "hist-meta";
+  const av = avatarEl(who);
+  meta.appendChild(av);
+  const info = document.createElement("div");
+  info.className = "hist-meta-info";
+  info.innerHTML = `<div class="hist-meta-top"><b>${escapeHtml(who.name)}</b> <span class="muted">· ${escapeHtml(fmtWhen(version.at))}</span></div>
+    <div class="hist-meta-sub muted">${version.label ? escapeHtml(version.label) : (KIND_BADGE[version.kind] || "salvataggio automatico")}</div>`;
+  meta.appendChild(info);
+
+  const actions = document.createElement("div");
+  actions.className = "hist-actions";
+  const labelBtn = document.createElement("button");
+  labelBtn.className = "btn small"; labelBtn.textContent = version.label ? "✎ Etichetta" : "＋ Etichetta";
+  labelBtn.title = "Dai un nome a questa versione (milestone)";
+  labelBtn.addEventListener("click", () => labelVersion(version));
+  const restoreBtn = document.createElement("button");
+  restoreBtn.className = "btn primary small"; restoreBtn.textContent = "↩ Ripristina";
+  restoreBtn.title = "Riporta il progetto a questa versione";
+  restoreBtn.disabled = isNewest;                 // restoring the current state is a no-op
+  if (isNewest) restoreBtn.title = "È già la versione attuale";
+  restoreBtn.addEventListener("click", () => restoreVersion(version));
+  actions.append(labelBtn, restoreBtn);
+  meta.appendChild(actions);
+  detail.appendChild(meta);
+
+  // Compare toggle.
+  const bar = document.createElement("div");
+  bar.className = "hist-compare";
+  bar.innerHTML = `<span class="muted">Confronta:</span>`;
+  const mk = (mode, text) => {
+    const b = document.createElement("button");
+    b.className = "hist-seg" + (histCompare === mode ? " on" : "");
+    b.textContent = text; b.type = "button";
+    b.addEventListener("click", () => { if (histCompare !== mode) { histCompare = mode; renderDetail(version, idx); } });
+    return b;
+  };
+  bar.appendChild(mk("prev", "con la precedente"));
+  bar.appendChild(mk("current", "con la copia attuale"));
+  detail.appendChild(bar);
+
+  // Body: file list + diff.
+  const body = document.createElement("div");
+  body.className = "hist-detail-body";
+  const files = document.createElement("ul");
+  files.className = "hist-files";
+  const changed = version.files.filter((f) => f.status !== "same");
+  const shown = changed.length ? changed : version.files;   // if nothing changed (baseline), list all
+  for (const f of shown) {
+    const li = document.createElement("li");
+    li.className = "hist-file" + (f.path === histSelPath ? " sel" : "");
+    li.innerHTML = `<span class="hist-file-badge ${f.status}">${{ added: "+", modified: "~", removed: "−", same: "=" }[f.status] || "="}</span><span class="hist-file-name">${escapeHtml(f.path)}</span>`;
+    li.addEventListener("click", () => { histSelPath = f.path; renderDetail(version, idx); });
+    files.appendChild(li);
+  }
+  body.appendChild(files);
+  const diff = document.createElement("div");
+  diff.className = "hist-diff"; diff.id = "histDiff";
+  body.appendChild(diff);
+  detail.appendChild(body);
+
+  // Pick a file to show: keep the current one if it's in the list, else the first changed.
+  const pick = shown.find((f) => f.path === histSelPath) || shown[0];
+  if (pick) { histSelPath = pick.path; for (const li of files.children) li.classList.toggle("sel", li.querySelector(".hist-file-name").textContent === pick.path); showDiff(version, pick); }
+  else diff.innerHTML = `<div class="hist-placeholder">Questa versione non contiene file.</div>`;
+}
+
+async function showDiff(version, file) {
+  const diff = $("histDiff");
+  if (!diff) return;
+  diff.innerHTML = `<div class="hist-placeholder">Calcolo differenze…</div>`;
+  try {
+    let before, after;
+    if (histCompare === "current") {
+      // Working copy → THIS version. The selected version is the "after" side in BOTH
+      // modes, so the signs keep one meaning: green = a line this version has, red = a
+      // line it lacks. Looking at an old version, text added since then reads as "−"
+      // (and the diff previews exactly what Ripristina would apply to today's copy).
+      before = currentContentOf(file.path);
+      after = await fileAt(version.id, file.path, false);
+    } else {
+      // previous version → this version
+      before = await fileAt(version.id, file.path, true);
+      after = await fileAt(version.id, file.path, false);
+    }
+    if (before.encoding === "base64" || after.encoding === "base64") {
+      diff.innerHTML = `<div class="hist-placeholder">📦 File binario — il confronto testuale non è disponibile.</div>`;
+      return;
+    }
+    diff.innerHTML = renderDiff(before.content || "", after.content || "");
+  } catch (e) {
+    diff.innerHTML = `<div class="hist-placeholder">Errore nel diff: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function fileAt(versionId, path, prev) {
+  const q = new URLSearchParams({ path });
+  if (prev) q.set("prev", "1");
+  return histJson(histApi(`/${versionId}/file?${q.toString()}`));
+}
+function currentContentOf(path) {
+  const v = filesMap && filesMap.get(path);
+  if (v instanceof Y.Text) return { encoding: null, content: v.toString(), missing: false };
+  if (v && v.encoding === "base64") return { encoding: "base64", content: v.content, missing: false };
+  return { encoding: null, content: "", missing: true };
+}
+
+// ---- line diff (LCS with common prefix/suffix trim + a fallback for pathological sizes) ----
+function lcsCore(a, b) {
+  const n = a.length, m = b.length;
+  if (!n) return b.map((s) => ({ t: "add", s }));
+  if (!m) return a.map((s) => ({ t: "del", s }));
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push({ t: "ctx", s: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: "del", s: a[i] }); i++; }
+    else { ops.push({ t: "add", s: b[j] }); j++; }
+  }
+  while (i < n) ops.push({ t: "del", s: a[i++] });
+  while (j < m) ops.push({ t: "add", s: b[j++] });
+  return ops;
+}
+function lineDiff(a, b) {
+  const n = a.length, m = b.length;
+  let s = 0; while (s < n && s < m && a[s] === b[s]) s++;
+  let e = 0; while (e < n - s && e < m - s && a[n - 1 - e] === b[m - 1 - e]) e++;
+  const aMid = a.slice(s, n - e), bMid = b.slice(s, m - e);
+  const ops = [];
+  for (let k = 0; k < s; k++) ops.push({ t: "ctx", s: a[k] });
+  if (aMid.length * bMid.length > 4_000_000) {           // too big for the O(nm) table — block-replace the middle
+    for (const x of aMid) ops.push({ t: "del", s: x });
+    for (const x of bMid) ops.push({ t: "add", s: x });
+  } else ops.push(...lcsCore(aMid, bMid));
+  for (let k = n - e; k < n; k++) ops.push({ t: "ctx", s: a[k] });
+  return ops;
+}
+function renderDiff(beforeText, afterText) {
+  if (beforeText === afterText) return `<div class="hist-placeholder">Nessuna differenza in questo file.</div>`;
+  const ops = lineDiff(beforeText.split("\n"), afterText.split("\n"));
+  // number lines and fold long unchanged runs
+  let oldN = 0, newN = 0;
+  const rows = ops.map((op) => {
+    if (op.t === "ctx") { oldN++; newN++; return { t: "ctx", o: oldN, n: newN, s: op.s }; }
+    if (op.t === "del") { oldN++; return { t: "del", o: oldN, n: null, s: op.s }; }
+    newN++; return { t: "add", o: null, n: newN, s: op.s };
+  });
+  const KEEP = 3, MINFOLD = 8, out = [];
+  for (let i = 0; i < rows.length;) {
+    if (rows[i].t !== "ctx") { out.push(rows[i++]); continue; }
+    let j = i; while (j < rows.length && rows[j].t === "ctx") j++;
+    const run = rows.slice(i, j), first = i === 0, last = j === rows.length;
+    if (run.length > MINFOLD) {
+      if (!first) out.push(...run.slice(0, KEEP));
+      const hidden = run.length - (first ? 0 : KEEP) - (last ? 0 : KEEP);
+      if (hidden > 0) out.push({ t: "fold", count: hidden });
+      if (!last) out.push(...run.slice(run.length - KEEP));
+    } else out.push(...run);
+    i = j;
+  }
+  const sign = { ctx: " ", add: "+", del: "−" };
+  const html = out.map((r) => r.t === "fold"
+    ? `<div class="dl fold">⋯ ${r.count} righe invariate ⋯</div>`
+    : `<div class="dl ${r.t}"><span class="dln">${r.o ?? ""}</span><span class="dln">${r.n ?? ""}</span><span class="dls">${sign[r.t]}</span><span class="dlt">${escapeHtml(r.s) || "&nbsp;"}</span></div>`).join("");
+  return `<div class="diff">${html}</div>`;
+}
+
+async function labelVersion(version) {
+  const next = prompt("Nome della versione (vuoto per rimuovere l'etichetta):", version.label || "");
+  if (next === null) return;                       // cancelled
+  try {
+    await histJson(histApi(`/${version.id}/label`), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: next.trim() }),
+    });
+    await loadTimeline();                          // refresh list + detail
+  } catch (e) { alert("Impossibile salvare l'etichetta: " + e.message); }
+}
+
+async function restoreVersion(version) {
+  if (!booted || !filesMap) { alert("Attendi il caricamento del progetto prima di ripristinare."); return; }
+  const when = fmtWhen(version.at);
+  if (!confirm(`Ripristinare la versione del ${when}?\n\nIl contenuto attuale del progetto viene sostituito con quello di questa versione, per tutti. Lo stato attuale resta comunque nella cronologia: puoi tornare indietro in qualsiasi momento.`)) return;
+  setStatus("busy", "Ripristino…");
+  let tree;
+  try { tree = (await histJson(histApi(`/${version.id}/tree`))).files || []; }
+  catch (e) { setStatus("err", "Errore"); alert("Impossibile leggere la versione: " + e.message); return; }
+
+  const target = new Map(tree.map((f) => [f.path, f]));
+  // Bump the break nonce FIRST so the store triggered by this change is forced into a fresh,
+  // non-amendable version — the state we're leaving is preserved as its own point in history.
+  const nonce = "r-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+  metaMap.set("historyBreak", nonce);
+  ydoc.transact(() => {
+    for (const [p, f] of target) {
+      const existing = filesMap.get(p);
+      if (f.encoding === "base64") {
+        filesMap.set(p, { encoding: "base64", content: f.content });
+      } else if (existing instanceof Y.Text) {
+        const cur = existing.toString();
+        if (cur !== (f.content || "")) { existing.delete(0, existing.length); if (f.content) existing.insert(0, f.content); }
+      } else {
+        const t = new Y.Text(); filesMap.set(p, t); if (f.content) t.insert(0, f.content);
+      }
+    }
+    for (const [p] of fileEntries()) if (!target.has(p)) filesMap.delete(p);   // drop files not in the target
+  });
+  setUpdatedBy();
+  // Rebind the open editor to the (possibly replaced) text; structural changes already
+  // re-render the tree via the filesMap observer.
+  const keep = currentPath && hasPath(currentPath) ? currentPath : null;
+  if (keep) openFile(keep);
+  closeHistory();
+  setStatus("ok", "Ripristinato ✓");
+  compile();                                       // reflect the restored content in the preview
+}
+
 // ---------- Load + wire up ----------
 async function init() {
   // Don't touch anything until the user is identified (auth.js sets the session cookie).
@@ -716,7 +1041,10 @@ async function init() {
   });
   $("tabPdf").addEventListener("click", () => showTab("pdf"));
   $("tabLog").addEventListener("click", () => showTab("log"));
+  $("history").addEventListener("click", openHistory);
+  $("histClose").addEventListener("click", closeHistory);
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
   });
 }

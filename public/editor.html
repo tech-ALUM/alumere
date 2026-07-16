@@ -31,6 +31,7 @@
         <span class="ic">▶</span> Recompile
       </button>
       <button id="download" class="btn" title="Scarica il PDF compilato">Download PDF</button>
+      <button id="history" class="btn" title="Cronologia versioni del progetto"><span class="ic">🕘</span> Cronologia</button>
       <div id="presence" class="presence" aria-label="Chi è online su questo progetto"></div>
       <span id="collabState" class="status idle" title="Stato collaborazione real-time">…</span>
       <span id="status" class="status idle">Ready</span>
@@ -83,6 +84,20 @@
       </div>
     </section>
   </main>
+
+  <!-- History (M2): full-screen overlay — timeline on the left, per-file diff of the selected version on the right. -->
+  <div id="historyOverlay" class="hist-overlay" hidden aria-hidden="true">
+    <header class="hist-head">
+      <div class="hist-title"><span class="ic">🕘</span> Cronologia <span class="muted" id="histProj"></span></div>
+      <button id="histClose" class="btn" title="Chiudi la cronologia (Esc)">✕ Chiudi</button>
+    </header>
+    <div class="hist-main">
+      <aside class="hist-list" id="histList" aria-label="Elenco versioni"></aside>
+      <section class="hist-detail" id="histDetail">
+        <div class="hist-placeholder">Seleziona una versione a sinistra per vederne le modifiche.</div>
+      </section>
+    </div>
+  </div>
 
   <script src="auth.js"></script>
   <script src="vendor/codemirror.js"></script>

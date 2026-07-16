@@ -11,7 +11,7 @@
 
 import express from "express";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, cp } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, cp, rename } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -309,6 +309,140 @@ async function readFilesFlat(dir, prefix = "") {
   return out;
 }
 
+// ---------- history (M2): content-addressed snapshots per save ----------
+// A project's live content is a Yjs doc materialized to files/ on each debounced store
+// (see attachCollab). History rides that SAME hook: every store also records a VERSION —
+// the whole file tree captured as content-addressed blobs (sha256), so re-saving an
+// unchanged file costs nothing and a typical save adds just one small blob. Storage lives
+// OUTSIDE files/ (writeFiles does rm -rf on files/), under history/:
+//   history/objects/<sha>   raw file bytes, deduped by content hash
+//   history/index.json      { versions: [ {id, at, by, label, kind, treeHash, files:[{path,sha,encoding?}]} ] }
+// The timeline stays readable by COALESCING: a continuous editing burst by one person
+// folds into a single evolving version (we amend the last one) until it settles
+// (HISTORY_COALESCE_MS) or someone else edits — like Overleaf's automatic history. A
+// restore or explicit checkpoint FORCES a fresh, non-amendable version (via a nonce the
+// client bumps in the shared meta map), so the state you restore FROM is never eaten by an amend.
+const HISTORY_COALESCE_MS = (Number(process.env.HISTORY_COALESCE_MIN) || 5) * 60 * 1000;
+const HEX64_RE = /^[0-9a-f]{64}$/;
+const historyDir = (id) => path.join(projectDir(id), "history");
+const objectsDir = (id) => path.join(historyDir(id), "objects");
+const objectPath = (id, sha) => path.join(objectsDir(id), sha);
+const historyIndexPath = (id) => path.join(historyDir(id), "index.json");
+const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const newVid = () => "v-" + crypto.randomBytes(6).toString("hex");
+
+// Serialize read-modify-write of a project's history index: a store hook and a REST label
+// edit could otherwise interleave. One promise chain per project id.
+const historyLocks = new Map();
+function withHistoryLock(id, fn) {
+  const prev = historyLocks.get(id) || Promise.resolve();
+  const next = prev.then(fn, fn);                    // run fn regardless of the prior outcome
+  historyLocks.set(id, next.then(() => {}, () => {}));
+  return next;
+}
+
+async function readHistoryIndex(id) {
+  try { return JSON.parse(await readFile(historyIndexPath(id), "utf8")); }
+  catch { return { versions: [] }; }
+}
+async function writeHistoryIndex(id, index) {
+  await mkdir(historyDir(id), { recursive: true });
+  const tmp = historyIndexPath(id) + ".tmp-" + crypto.randomBytes(4).toString("hex");
+  await writeFile(tmp, JSON.stringify(index), "utf8");
+  await rename(tmp, historyIndexPath(id));           // atomic swap: readers never see a half-written index
+}
+
+// Raw bytes of a flat file entry (text is utf8, binary is base64-decoded).
+const bytesOf = (f) => f.encoding === "base64"
+  ? Buffer.from(f.content || "", "base64")
+  : Buffer.from(f.content ?? "", "utf8");
+
+// Store a blob unless we already have it; return its sha. Atomic (temp + rename) so a crash
+// mid-write can't leave a corrupt object sitting at the content-addressed name.
+async function putBlob(id, buf) {
+  const sha = sha256(buf);
+  const dest = objectPath(id, sha);
+  if (existsSync(dest)) return sha;
+  await mkdir(objectsDir(id), { recursive: true });
+  const tmp = dest + ".tmp-" + crypto.randomBytes(4).toString("hex");
+  await writeFile(tmp, buf);
+  try { await rename(tmp, dest); }
+  catch (e) { if (!existsSync(dest)) throw e; await rm(tmp, { force: true }).catch(() => {}); }
+  return sha;
+}
+async function getBlob(id, sha) {
+  if (!HEX64_RE.test(sha || "")) return null;
+  try { return await readFile(objectPath(id, sha)); } catch { return null; }
+}
+
+// Snapshot a flat file list into blobs → a path-sorted [{path, sha, encoding?}] tree.
+async function treeFromFiles(id, files) {
+  const tree = [];
+  for (const f of files || []) {
+    const rel = safeRelPath(f.path || "");
+    if (!rel) continue;
+    const sha = await putBlob(id, bytesOf(f));
+    tree.push(f.encoding === "base64" ? { path: rel, sha, encoding: "base64" } : { path: rel, sha });
+  }
+  tree.sort((a, b) => a.path.localeCompare(b.path));
+  return tree;
+}
+const treeHash = (tree) => sha256(Buffer.from(tree.map((f) => `${f.path}\0${f.sha}\0${f.encoding || ""}`).join("\n"), "utf8"));
+
+// Delete blobs an amend just orphaned (now referenced by no surviving version).
+async function pruneOrphans(id, index, candidateShas) {
+  const kept = new Set();
+  for (const v of index.versions) for (const f of v.files || []) kept.add(f.sha);
+  for (const sha of new Set(candidateShas)) if (!kept.has(sha)) await rm(objectPath(id, sha), { force: true }).catch(() => {});
+}
+
+// Record one version from the current file tree. Coalesces same-author bursts by amending
+// the last version; forceNew (restore / checkpoint / first-seed) always cuts a fresh,
+// non-amendable one. No-op when nothing has changed since the last version.
+async function recordVersion(id, files, by, { kind = "auto", label = null, forceNew = false } = {}) {
+  return withHistoryLock(id, async () => {
+    const tree = await treeFromFiles(id, files);
+    if (!tree.length) return null;                   // never snapshot an empty tree
+    const th = treeHash(tree);
+    const index = await readHistoryIndex(id);
+    const last = index.versions[index.versions.length - 1];
+    if (last && last.treeHash === th && !forceNew) return last.id;   // genuinely unchanged
+    const now = new Date().toISOString();
+    const amendable = !forceNew && kind === "auto" && last && last.kind === "auto" && !last.label
+      && last.by && by && last.by.id === by.id
+      && (Date.now() - Date.parse(last.at) < HISTORY_COALESCE_MS);
+    if (amendable) {
+      const prevShas = (last.files || []).map((f) => f.sha);
+      last.at = now; last.treeHash = th; last.files = tree;
+      await writeHistoryIndex(id, index);
+      await pruneOrphans(id, index, prevShas);
+      return last.id;
+    }
+    const v = { id: newVid(), at: now, by: by || null, label, kind, treeHash: th, files: tree };
+    index.versions.push(v);
+    await writeHistoryIndex(id, index);
+    return v.id;
+  });
+}
+
+// The first time a project is opened, capture its on-disk starting point as a baseline
+// version (kind "initial" → never coalesced away by a same-author first edit).
+async function ensureBaseline(id, files, by) {
+  const index = await readHistoryIndex(id);
+  if (index.versions.length) return;
+  await recordVersion(id, files, by, { kind: "initial", forceNew: true });
+}
+
+// How many paths changed between a version and its predecessor (added / modified / removed).
+function countChanged(v, prev) {
+  const before = new Map((prev?.files || []).map((f) => [f.path, f.sha]));
+  const after = new Map((v.files || []).map((f) => [f.path, f.sha]));
+  let n = 0;
+  for (const [p, s] of after) if (before.get(p) !== s) n++;
+  for (const p of before.keys()) if (!after.has(p)) n++;
+  return n;
+}
+
 // ---------- session endpoints ----------
 app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
 
@@ -494,6 +628,99 @@ app.post("/api/projects/upload", requireUser, async (req, res) => {
   }
 });
 
+// ---------- history endpoints (M2) ----------
+// Read-only browse of the timeline + per-file contents at a version, plus label edits.
+// RESTORE is done CLIENT-side through the live Yjs doc (see app.js): the client pulls a
+// version's tree from here and replaces the shared text in place, so every collaborator's
+// editor follows — a server-side files/ write would just be overwritten by the live doc.
+
+// Timeline, newest first. Lightweight: no file contents, just what the list needs to draw.
+app.get("/api/projects/:id/history", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  if (!(await readMeta(id))) return res.status(404).json({ ok: false, error: "not found" });
+  const index = await readHistoryIndex(id);
+  const out = index.versions.map((v, i) => ({
+    id: v.id, at: v.at, by: v.by || null, label: v.label || null, kind: v.kind || "auto",
+    fileCount: (v.files || []).length, changed: countChanged(v, index.versions[i - 1]),
+  }));
+  out.reverse();
+  res.json({ ok: true, versions: out });
+});
+
+// One version's metadata + its file list, each tagged by how it differs from the previous
+// version (added / modified / removed / same) so the detail pane can show "what changed".
+app.get("/api/projects/:id/history/:vid", requireUser, async (req, res) => {
+  const { id, vid: versionId } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const index = await readHistoryIndex(id);
+  const i = index.versions.findIndex((x) => x.id === versionId);
+  if (i < 0) return res.status(404).json({ ok: false, error: "no such version" });
+  const v = index.versions[i], prev = index.versions[i - 1];
+  const before = new Map((prev?.files || []).map((f) => [f.path, f.sha]));
+  const files = (v.files || []).map((f) => ({
+    path: f.path, encoding: f.encoding || null,
+    status: !before.has(f.path) ? "added" : (before.get(f.path) !== f.sha ? "modified" : "same"),
+  }));
+  for (const [p] of before) if (!(v.files || []).some((f) => f.path === p)) files.push({ path: p, encoding: null, status: "removed" });
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  res.json({ ok: true, version: { id: v.id, at: v.at, by: v.by || null, label: v.label || null, kind: v.kind || "auto", files } });
+});
+
+// Content of one file AT a version (text as utf8, binary as base64). `path` must be one the
+// version actually holds — we resolve it to a sha and read the blob, so no user-supplied
+// path ever touches the filesystem. `prev=1` reads the same path in the PREVIOUS version
+// (empty if it wasn't there yet) — the two sides a diff needs, from one endpoint.
+app.get("/api/projects/:id/history/:vid/file", requireUser, async (req, res) => {
+  const { id, vid: versionId } = req.params;
+  const wanted = String(req.query.path || "");
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const index = await readHistoryIndex(id);
+  const i = index.versions.findIndex((x) => x.id === versionId);
+  if (i < 0) return res.status(404).json({ ok: false, error: "no such version" });
+  const source = req.query.prev ? index.versions[i - 1] : index.versions[i];
+  const f = source && (source.files || []).find((x) => x.path === wanted);
+  if (!f) return res.json({ ok: true, path: wanted, encoding: null, content: "", missing: true });
+  const buf = await getBlob(id, f.sha);
+  if (!buf) return res.status(404).json({ ok: false, error: "blob missing" });
+  if (f.encoding === "base64") res.json({ ok: true, path: f.path, encoding: "base64", content: buf.toString("base64") });
+  else res.json({ ok: true, path: f.path, encoding: null, content: buf.toString("utf8") });
+});
+
+// The whole tree at a version, in the {path, content, encoding?} shape the client applies
+// to the live doc on restore.
+app.get("/api/projects/:id/history/:vid/tree", requireUser, async (req, res) => {
+  const { id, vid: versionId } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const index = await readHistoryIndex(id);
+  const v = index.versions.find((x) => x.id === versionId);
+  if (!v) return res.status(404).json({ ok: false, error: "no such version" });
+  const files = [];
+  for (const f of v.files || []) {
+    const buf = await getBlob(id, f.sha);
+    if (!buf) continue;
+    files.push(f.encoding === "base64" ? { path: f.path, content: buf.toString("base64"), encoding: "base64" } : { path: f.path, content: buf.toString("utf8") });
+  }
+  res.json({ ok: true, files });
+});
+
+// Name a version (a milestone). Labeled versions are never coalesced away.
+app.post("/api/projects/:id/history/:vid/label", requireUser, async (req, res) => {
+  const { id, vid: versionId } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const label = String((req.body || {}).label || "").trim().slice(0, 120) || null;
+  const done = await withHistoryLock(id, async () => {
+    const index = await readHistoryIndex(id);
+    const v = index.versions.find((x) => x.id === versionId);
+    if (!v) return false;
+    v.label = label;
+    await writeHistoryIndex(id, index);
+    return true;
+  });
+  if (!done) return res.status(404).json({ ok: false, error: "no such version" });
+  res.json({ ok: true, label });
+});
+
 // ---------- compile (compiles the files sent inline; stateless temp dir) ----------
 function runLatexmk(cwd, mainFile, engineFlag) {
   return new Promise((resolve) => {
@@ -587,7 +814,8 @@ async function attachCollab(httpServer) {
   // rooms (no meta) are left untouched: the doc stays empty, a plain relay.
   async function onLoadDocument({ documentName, document }) {
     if (!validId(documentName)) return;
-    if (!(await readMeta(documentName))) return;
+    const meta = await readMeta(documentName);
+    if (!meta) return;
     const filesMap = document.getMap(COLLAB_FILES_KEY);
     if (filesMap.size > 0) return;                          // already loaded/populated
     const files = await readFilesFlat(filesDir(documentName));
@@ -603,6 +831,9 @@ async function attachCollab(httpServer) {
       }
     });
     console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
+    // History: capture the on-disk starting point the first time this project is opened.
+    await ensureBaseline(documentName, files, meta.createdBy || SYSTEM_USER)
+      .catch((e) => console.warn(`[alumere] history baseline failed for "${documentName}": ${e.message}`));
   }
 
   // Debounced by Hocuspocus. The doc is the single source of truth, so we rewrite
@@ -624,6 +855,15 @@ async function attachCollab(httpServer) {
     meta.updatedAt = new Date().toISOString();
     const ub = document.getMap(COLLAB_META_KEY).get("updatedBy");
     if (ub && ub.id && ub.name) meta.updatedBy = { id: String(ub.id), name: String(ub.name) };
+    // History: this same debounced save is our version boundary. A restore or explicit
+    // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
+    // version; we remember the last nonce we acted on in meta.json, so the flag needs no
+    // clearing from the live doc (which would mean the server writing into the CRDT).
+    const brk = document.getMap(COLLAB_META_KEY).get("historyBreak");
+    const forceNew = brk != null && brk !== meta.lastHistoryBreak;
+    await recordVersion(documentName, files, meta.updatedBy || meta.createdBy || SYSTEM_USER, { forceNew })
+      .catch((e) => console.warn(`[alumere] history record failed for "${documentName}": ${e.message}`));
+    if (forceNew) meta.lastHistoryBreak = brk;
     await writeMeta(documentName, meta);
     console.log(`[alumere] collab stored "${documentName}" (${files.length} files)`);
   }
