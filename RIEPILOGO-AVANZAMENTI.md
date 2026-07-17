@@ -7,6 +7,29 @@
 
 ---
 
+## 2026-07-17 (bis) — Smoke test end-to-end committato ✅
+
+Finora gli harness di verifica erano script usa-e-getta ricostruiti a ogni sessione; ora c'è
+**`bash test/smoke.sh`** nel repo: un comando, ~1 minuto, **16 controlli** su tutta la superficie.
+Avvia un container **isolato** (:3100, dati temporanei via `mktemp`; dev e prod mai toccati) e
+attraversa: gate 401 → magic-link (SMTP off → link dal log) → login → progetti → **edit
+collaborativo vero** (peer Yjs headless col cookie, `test/collab-edit.mjs`) → history (versioni,
+autore, contenuto col marcatore, etichetta, tree, 401) → compile LaTeX → GC (fixture con blob
+orfano+temp: rimossi; referenziato e versione: intatti). Serve solo docker+curl+python3 sull'host.
+
+**Inciampi utili da ricordare**
+- `HocuspocusProvider` con solo `url` **scarta `WebSocketPolyfill`** (inoltra soltanto
+  url/connect/parameters alla websocket interna) → su Node parte la WebSocket globale senza
+  header → niente cookie → 401 al gate → "connecting" infinito. Serve costruire
+  `HocuspocusProviderWebsocket` esplicitamente col polyfill e passarla come `websocketProvider`.
+- La **fixture GC va creata a server già su** (cartella progetti non vuota al boot = niente seed
+  del progetto d'esempio) e **dentro il container** via `docker exec`: file creati dall'host in un
+  bind-mount possono non propagarsi in tempo su Docker Desktop.
+
+Esito: **16/16** — i fallimenti dei primi giri erano tutti bug dell'harness, l'app era a posto.
+
+---
+
 ## 2026-07-17 — Rifiniture history: GC blob orfani + retention versioni ✅
 
 Le ultime due rifiniture di M2. Solo `server.js` (~60 righe), zero client, zero dipendenze nuove.
