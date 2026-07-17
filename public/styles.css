@@ -260,13 +260,14 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 
 /* ---------- Preview ---------- */
 .preview-body { position: relative; flex: 1; min-height: 0; background: #525659; }
-/* PDF zoom: the stage is the box we grow (JS sets its width/height %); the scroll wrapper
-   scrolls it. The embedded viewer fits the page to the iframe width, so a bigger stage =
-   a crisply re-rendered bigger page (no blurry CSS scaling). */
+/* PDF preview rendered by PDF.js onto <canvas> (see app.js). The scroll box holds a sizer
+   whose size mirrors the current zoom (so the scrollbars are right); the pages layer carries
+   a CSS transform for instant feedback during a pinch, then a crisp re-render snaps in. */
 .pdf-scroll { position: absolute; inset: 0; overflow: auto; background: #525659; }
 .pdf-scroll.hidden { display: none !important; }
-.pdf-stage { width: 100%; height: 100%; }
-.pdf { width: 100%; height: 100%; border: 0; display: block; background: #525659; }
+.pdf-sizer { margin: 0 auto; }                 /* centre the page when it's narrower than the pane */
+.pdf-pages { transform-origin: 0 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+.pdf-pages canvas { display: block; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.45); }
 
 /* Zoom controls, shown only over the PDF tab. */
 .zoombar { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
@@ -279,10 +280,10 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 .zoomlabel { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
 .zoombtn:hover, .zoomlabel:hover { background: var(--accent-soft); color: var(--accent-d); }
 
-/* While a splitter is being dragged: freeze the cursor, kill text selection, and stop the
-   PDF iframe from swallowing the mouse events (which would stall the drag). */
+/* While a splitter is being dragged: freeze the cursor, kill text selection, and keep the
+   preview from capturing the mouse (which would fight the drag). */
 body.dragging { cursor: col-resize; user-select: none; }
-body.dragging .pdf { pointer-events: none; }
+body.dragging .pdf-scroll { pointer-events: none; }
 .logwrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .log {
   flex: 1 1 auto; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto;

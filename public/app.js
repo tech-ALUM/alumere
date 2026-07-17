@@ -93,8 +93,9 @@ function colorFor(seed) {
 const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
 const openPathEl = $("openPath"), presenceEl = $("presence");
-const pdfFrame = $("pdf"), logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
-const pdfScroll = $("pdfScroll"), pdfStage = $("pdfStage");
+const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
+const pdfScroll = $("pdfScroll"), pdfSizer = $("pdfSizer"), pagesEl = $("pdfPages");
+const previewBody = document.querySelector(".preview-body");
 const engineSel = $("engine");
 
 let currentPath = null;            // path of the open file (null = nothing open)
@@ -549,7 +550,7 @@ function renderIssues(issues) {
   }
 }
 
-let pdfUrl = null, pdfBlob = null;
+let pdfBlob = null;
 async function compile() {
   setStatus("busy", "Compilo…");
   const files = flattenForCompile();
@@ -561,12 +562,12 @@ async function compile() {
     const issues = parseLatexLog(data.log);
     renderIssues(issues);
     if (data.ok && data.pdf) {
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
       pdfBlob = b64ToBlob(data.pdf, "application/pdf");
-      pdfUrl = URL.createObjectURL(pdfBlob);
-      pdfFrame.src = pdfUrl;
       previewEmpty.classList.add("hidden");
-      showTab("pdf");
+      showTab("pdf");                                  // reveal the pane before we measure it
+      try { await loadPdf(data.pdf); }                 // base64 → PDF.js canvases
+      catch (err) { console.warn("PDF render failed:", err); }
+      showTab("pdf");                                  // pdfDoc is set now → the zoom bar shows
       setStatus("ok", "Compilato ✓");
     } else {
       const nErr = issues.filter((x) => x.kind === "error").length;
@@ -585,35 +586,163 @@ function showTab(which) {
   const pdf = which === "pdf";
   pdfScroll.classList.toggle("hidden", !pdf);
   logWrap.classList.toggle("hidden", pdf);
-  if (pdf) previewEmpty.classList.toggle("hidden", !!pdfUrl);
+  if (pdf) previewEmpty.classList.toggle("hidden", !!pdfDoc);
   else previewEmpty.classList.add("hidden");
   $("tabPdf").classList.toggle("active", pdf);
   $("tabLog").classList.toggle("active", !pdf);
-  $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfUrl);
+  $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfDoc);
 }
 
-// ---------- PDF zoom (only the preview, never the whole page) ----------
-// The embedded PDF viewer fits the page to its iframe's width. So we don't zoom the page
-// or CSS-scale a raster (which blurs): we grow the iframe's own box inside a scroll wrapper,
-// and the native viewer re-renders the page crisply at the larger size. `.pdf-stage` is the
-// box we resize; `.pdf-scroll` scrolls it. 1.0 = fit-width (the natural size).
-const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_STEP = 0.25;
-let pdfZoom = 1;
-function applyPdfZoom() {
-  if (!pdfStage) return;
-  pdfStage.style.width = Math.round(pdfZoom * 100) + "%";
-  pdfStage.style.height = Math.round(pdfZoom * 100) + "%";
-  const lbl = $("pdfZoomLabel");
-  if (lbl) lbl.textContent = Math.round(pdfZoom * 100) + "%";
+// ---------- PDF preview (PDF.js): crisp canvas render + smooth continuous zoom ----------
+// The native <iframe> viewer couldn't do smooth, continuous, pane-scoped zoom, so we render
+// the PDF ourselves onto <canvas>. 100% = fit-to-width of the preview pane; `zoom` is a
+// continuous multiplier over that. Pinch / ⌘(Ctrl)+wheel over the preview zooms around the
+// cursor; the canvases re-render crisply (at devicePixelRatio) once the gesture settles,
+// with a CSS transform on the pages layer giving instant feedback in between.
+let pdfjsLib = null, pdfDoc = null, pdfPageList = [];
+let fitScale = 1;            // PDF.js scale at which page 1 fills the pane width (= 100%)
+let zoom = 1;               // user multiplier over fit-width (continuous)
+let renderedZoom = 1;        // the zoom the current canvases were rasterised at
+let naturalW = 0, naturalH = 0;   // untransformed size of the pages layer, in px
+let renderTimer = null, rendering = false, pendingRender = false;
+const ZOOM_MIN = 0.1, ZOOM_MAX = 5;
+
+async function ensurePdfjs() {
+  if (pdfjsLib) return pdfjsLib;
+  pdfjsLib = await import("./vendor/pdfjs/pdf.min.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.min.mjs";
+  return pdfjsLib;
 }
-function setZoom(z) { pdfZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(z * 100) / 100)); applyPdfZoom(); }
+
+async function loadPdf(base64) {
+  await ensurePdfjs();
+  const bin = atob(base64), data = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+  const doc = await pdfjsLib.getDocument({ data }).promise;
+  if (pdfDoc) { try { pdfDoc.destroy(); } catch {} }
+  pdfDoc = doc;
+  pdfPageList = [];
+  for (let i = 1; i <= doc.numPages; i++) pdfPageList.push(await doc.getPage(i));
+  computeFitScale();
+  await renderPdf();
+}
+
+function computeFitScale() {
+  if (!pdfPageList.length) return;
+  const vp = pdfPageList[0].getViewport({ scale: 1 });
+  const avail = Math.max(120, previewBody.clientWidth - 32);   // minus .pdf-pages padding
+  fitScale = avail / vp.width;
+}
+
+// Rasterise every page at the current zoom. Crisp: the backing store is devicePixelRatio,
+// capped so a big zoom can't allocate an enormous canvas. A token guards against an older
+// (slower) render finishing after a newer one.
+// Rasterise every page at the current zoom. SERIALISED: two concurrent render()s on the same
+// PDF.js page proxy conflict and leave a canvas stuck, so we never overlap — if a request
+// arrives mid-render, we loop once more at the end with whatever `zoom` is by then (so the
+// latest zoom always wins). Crisp: backing store at devicePixelRatio, capped so a big zoom
+// can't allocate an enormous canvas.
+async function renderPdf() {
+  if (!pdfPageList.length) return;
+  if (rendering) { pendingRender = true; return; }
+  rendering = true;
+  try {
+    do {
+      pendingRender = false;
+      const dpr = window.devicePixelRatio || 1;
+      const scale = fitScale * zoom;
+      const canvases = [];
+      for (const page of pdfPageList) {
+        const vp = page.getViewport({ scale });
+        const backing = Math.min(dpr, 3200 / vp.width);        // cap canvas pixels
+        const canvas = document.createElement("canvas");
+        canvas.style.width = Math.round(vp.width) + "px";
+        canvas.style.height = Math.round(vp.height) + "px";
+        canvas.width = Math.max(1, Math.round(vp.width * backing));
+        canvas.height = Math.max(1, Math.round(vp.height * backing));
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport: page.getViewport({ scale: scale * backing }) }).promise;
+        canvases.push(canvas);
+      }
+      pagesEl.style.transform = "";
+      pagesEl.replaceChildren(...canvases);
+      renderedZoom = zoom;
+      naturalW = pagesEl.offsetWidth;
+      naturalH = pagesEl.offsetHeight;
+      pdfSizer.style.width = naturalW + "px";
+      pdfSizer.style.height = naturalH + "px";
+      updateZoomLabel();
+    } while (pendingRender);                                   // a newer zoom came in mid-render
+  } finally {
+    rendering = false;
+  }
+}
+
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => { renderTimer = null; renderPdf(); }, 120);
+}
+
+// Instant, cheap feedback during a gesture: CSS-scale the already-rendered canvases by the
+// ratio to their rasterised zoom, and size the sizer to match so the scrollbars stay honest.
+function applyTransform() {
+  const k = renderedZoom ? zoom / renderedZoom : 1;
+  pagesEl.style.transform = Math.abs(k - 1) < 1e-4 ? "" : `scale(${k})`;
+  pdfSizer.style.width = (naturalW * k) + "px";
+  pdfSizer.style.height = (naturalH * k) + "px";
+  updateZoomLabel();
+}
+
+function updateZoomLabel() {
+  const lbl = $("pdfZoomLabel");
+  if (lbl) lbl.textContent = Math.round(zoom * 100) + "%";
+}
+
+// Change zoom keeping the content point under (clientX,clientY) fixed. Live bounding rects
+// keep it correct regardless of the auto-margin centring.
+function zoomAround(target, clientX, clientY) {
+  const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, target));
+  if (Math.abs(next - zoom) < 1e-4) return;
+  const before = pagesEl.getBoundingClientRect();
+  const kOld = renderedZoom ? zoom / renderedZoom : 1;
+  const cx = (clientX - before.left) / kOld;                   // the point, in natural px
+  const cy = (clientY - before.top) / kOld;
+  zoom = next;
+  applyTransform();
+  const kNew = renderedZoom ? zoom / renderedZoom : 1;
+  const after = pagesEl.getBoundingClientRect();
+  pdfScroll.scrollLeft += after.left - (clientX - cx * kNew);
+  pdfScroll.scrollTop += after.top - (clientY - cy * kNew);
+  scheduleRender();
+}
+function zoomToCenter(target) {
+  const r = pdfScroll.getBoundingClientRect();
+  zoomAround(target, r.left + r.width / 2, r.top + r.height / 2);
+}
+
 function setupZoom() {
-  const bar = $("pdfZoomBar");
-  if (!bar) return;
-  $("zoomOut").addEventListener("click", () => setZoom(pdfZoom - ZOOM_STEP));
-  $("zoomIn").addEventListener("click", () => setZoom(pdfZoom + ZOOM_STEP));
-  $("zoomReset").addEventListener("click", () => setZoom(1));
-  applyPdfZoom();
+  if (!$("pdfZoomBar")) return;
+  $("zoomOut").addEventListener("click", () => zoomToCenter(zoom - 0.1));
+  $("zoomIn").addEventListener("click", () => zoomToCenter(zoom + 0.1));
+  // Back to fit-width. Same path as the buttons/pinch: instant transform feedback now, crisp
+  // re-render on settle — going straight to renderPdf() here could be superseded by an
+  // in-flight render and silently no-op.
+  $("zoomReset").addEventListener("click", () => { zoom = 1; applyTransform(); scheduleRender(); });
+  // Pinch (a Mac trackpad reports it as wheel+ctrlKey) or ⌘/Ctrl+wheel → smooth zoom around
+  // the cursor. A plain wheel is left alone so it scrolls the pages.
+  pdfScroll.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !pdfDoc) return;
+    e.preventDefault();
+    zoomAround(zoom * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
+  }, { passive: false });
+  // Keep "100% = fit width" as the pane is resized (splitter drag / window resize).
+  if (window.ResizeObserver) {
+    let rt = null;
+    new ResizeObserver(() => {
+      if (!pdfDoc) return;
+      if (rt) clearTimeout(rt);
+      rt = setTimeout(() => { computeFitScale(); renderPdf(); }, 150);
+    }).observe(previewBody);
+  }
 }
 
 // ---------- Splitters ----------
@@ -626,9 +755,8 @@ function setupSplitters() {
       e.preventDefault();
       const startX = e.clientX, startFilesW = filesW, startFrac = editorFrac;
       const avail = () => workspace.clientWidth - filesW - 12;
-      // While dragging over the PDF iframe, the iframe swallows mousemove/mouseup and the
-      // drag stalls. body.dragging disables pointer-events on it (see styles.css) so every
-      // move keeps reaching us, and freezes the cursor to col-resize + kills text selection.
+      // body.dragging freezes the cursor to col-resize, kills text selection, and disables
+      // pointer-events on the preview so it can't capture the mouse mid-drag (see styles.css).
       document.body.classList.add("dragging");
       const move = (ev) => {
         const dx = ev.clientX - startX;
