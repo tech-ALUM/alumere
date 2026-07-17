@@ -7,6 +7,44 @@
 
 ---
 
+## 2026-07-17 — Rifiniture history: GC blob orfani + retention versioni ✅
+
+Le ultime due rifiniture di M2. Solo `server.js` (~60 righe), zero client, zero dipendenze nuove.
+
+**Cosa c'è ora**
+- **Retention**: le versioni *auto* senza etichetta più vecchie di `HISTORY_RETENTION_DAYS`
+  (default **90 giorni**) scadono. Sopravvivono sempre: le versioni **etichettate**, i
+  **checkpoint**, i **ripristini**, la **baseline iniziale**, e comunque le **ultime 10**
+  (`HISTORY_RETENTION_KEEP`) — un progetto fermo non perde mai la sua timeline recente.
+  `HISTORY_RETENTION_DAYS=0` disattiva la retention.
+- **GC dei blob orfani**: una passata periodica (ogni 6h, `HISTORY_GC_INTERVAL_H`; la prima
+  ~15s dopo il boot) applica la retention e poi cancella da `history/objects/` ogni blob che
+  nessuna versione superstite referenzia (scarti della retention, avanzi di amend dopo un
+  crash) + i temp `.tmp-*` rimasti a terra. I file non riconosciuti (né sha né temp) non
+  vengono toccati.
+
+**Scelte (e perché)**
+- **GC sotto lo stesso lock per-progetto di `recordVersion`**: mentre la passata gira su un
+  progetto nessuno store può intrecciarsi → un blob su disco ma assente dall'indice è garbage
+  *per costruzione*, niente euristiche fragili sull'età dei file.
+- Milestone intoccabili + minimo di versioni recenti: la retention taglia solo il rumore
+  (auto coalescente vecchio), mai i punti fermi voluti dalle persone.
+- Log solo quando c'è qualcosa da dire (passata silenziosa se non rimuove nulla).
+
+**Verificato** (container isolato su :3100 + dati temporanei; dev e prod mai toccati)
+- Progetto finto con 7 versioni (initial, auto vecchie, etichettata, checkpoint, recenti) e 6
+  oggetti su disco: la passata rimuove **esattamente** le 2 auto scadute e i 4 blob
+  orfani/temp; salvi il blob condiviso, la milestone, il checkpoint, le recenti e un file
+  estraneo (non-sha) lasciato apposta nella cartella.
+- `HISTORY_RETENTION_DAYS=0`: nessuna versione toccata, rimossi solo i 2 veri orfani.
+- Idempotenza: seconda passata sui dati già puliti → non trova nulla (e non logga).
+- Dev container su :3000: hot-reload pulito col nuovo codice, load/store collab regolari.
+
+**Prossimo**: sicurezza giro 2 (allowlist per-persona, ACL per-progetto). ⚠️ **Non è live**:
+serve il pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-16 (sera) — Rifiniture history: diff intra-riga + checkpoint manuale ✅
 
 Le prime due rifiniture di M2 (le altre — GC blob orfani e retention — restano in lista). Tocca
