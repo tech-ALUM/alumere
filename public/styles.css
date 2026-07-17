@@ -65,10 +65,25 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .toolbar { display: flex; align-items: center; gap: 10px; }
-.engine { font-size: 12px; color: #cddce8; display: flex; align-items: center; gap: 6px; }
-.engine select {
+
+/* Settings dropdown (engine + editor theme): rarely-touched controls live behind ⚙
+   instead of permanently occupying the toolbar. */
+.menu { position: relative; }
+.menu-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
+  display: flex; flex-direction: column; gap: 10px; min-width: 220px;
+  padding: 12px 14px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(16, 48, 73, .22);
+}
+.menu-pop[hidden] { display: none; }
+.menu-pop label {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap;
+}
+.menu-pop select {
   font-family: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px;
-  border: 1px solid #3c5266; background: #22323f; color: #eef4f9;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
 }
 .btn {
   font-size: 13px; padding: 6px 12px; border-radius: 7px;

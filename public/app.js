@@ -233,8 +233,8 @@ function buildList(list) {
     nm.className = "rowname"; nm.textContent = node.name;
     const actions = document.createElement("span");
     actions.className = "rowactions";
-    const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rename";
-    const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Delete";
+    const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rinomina";
+    const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Elimina";
     actions.append(renameBtn, delBtn);
     row.append(tw, ic, nm);
     const here = node.type === "file" ? peersByFile.get(node.path) : null;
@@ -263,7 +263,7 @@ function buildList(list) {
 
 // Structure ops mutate the shared map, so they propagate live to every peer.
 function newFile() {
-  const name = prompt("Nome nuovo file:", "untitled.tex");
+  const name = prompt("Nome nuovo file:", "senza-titolo.tex");
   if (!name) return;
   const clean = name.trim().replace(/^\/+|\/+$/g, "");
   if (!clean) return;
@@ -548,7 +548,7 @@ function renderIssues(issues) {
 
 let pdfUrl = null, pdfBlob = null;
 async function compile() {
-  setStatus("busy", "Compiling…");
+  setStatus("busy", "Compilo…");
   const files = flattenForCompile();
   const payload = { files, main: detectMain(files), engine: engineSel.value };
   try {
@@ -1181,8 +1181,8 @@ async function init() {
   let meta;
   try { const d = await (await fetch(`/api/projects/${PROJECT_ID}`)).json(); if (!d.ok) throw 0; meta = d.project; }
   catch { document.body.innerHTML = errorScreen("Progetto non trovato o server irraggiungibile."); return; }
-  $("projName").textContent = meta.name || "Project";
-  document.title = (meta.name || "Project") + " — Alumère";
+  $("projName").textContent = meta.name || "Progetto";
+  document.title = (meta.name || "Progetto") + " — Alumère";
   initEditorTheme();
 
   if (!window.YCOLLAB) {
@@ -1229,8 +1229,18 @@ async function init() {
   $("history").addEventListener("click", openHistory);
   $("histClose").addEventListener("click", closeHistory);
   $("histCheckpoint").addEventListener("click", checkpointNow);
+  // Settings dropdown (⚙): toggle on the button, close on outside click or Esc.
+  const settingsPop = document.querySelector("#settingsMenu .menu-pop");
+  $("settingsBtn").addEventListener("click", (e) => { e.stopPropagation(); settingsPop.hidden = !settingsPop.hidden; });
+  document.addEventListener("click", (e) => {
+    if (!settingsPop.hidden && !settingsPop.contains(e.target)) settingsPop.hidden = true;
+  });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
+    if (e.key === "Escape") {
+      if (!settingsPop.hidden) { settingsPop.hidden = true; return; }
+      if (!$("historyOverlay").hidden) { closeHistory(); return; }
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
   });
 }

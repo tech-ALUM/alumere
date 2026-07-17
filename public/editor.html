@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="it">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -12,43 +12,46 @@
       <a class="backlink" href="index.html" title="Torna ai progetti">←</a>
       <span class="logo">∑</span>
       <span class="name">Alum<span class="thin">ère</span></span>
-      <span class="projname" id="projName">Project</span>
+      <span class="projname" id="projName">Progetto</span>
     </div>
     <div class="toolbar">
-      <label class="engine">
-        Engine
-        <select id="engine">
-          <option value="xelatex" selected>XeLaTeX</option>
-          <option value="pdflatex">pdfLaTeX</option>
-          <option value="lualatex">LuaLaTeX</option>
-        </select>
-      </label>
-      <label class="engine">
-        Theme
-        <select id="editorTheme" title="Editor colour palette"></select>
-      </label>
-      <button id="recompile" class="btn primary" title="Recompile (Ctrl/Cmd+S compila)">
-        <span class="ic">▶</span> Recompile
+      <button id="recompile" class="btn primary" title="Compila il PDF (Ctrl/Cmd+S)">
+        <span class="ic">▶</span> Compila
       </button>
-      <button id="download" class="btn" title="Scarica il PDF compilato">Download PDF</button>
+      <button id="download" class="btn" title="Scarica il PDF compilato">Scarica PDF</button>
       <button id="history" class="btn" title="Cronologia versioni del progetto"><span class="ic">🕘</span> Cronologia</button>
+      <div class="menu" id="settingsMenu">
+        <button id="settingsBtn" class="btn" title="Impostazioni (motore LaTeX, tema editor)" aria-haspopup="true">⚙</button>
+        <div class="menu-pop" hidden>
+          <label>Motore LaTeX
+            <select id="engine">
+              <option value="xelatex" selected>XeLaTeX</option>
+              <option value="pdflatex">pdfLaTeX</option>
+              <option value="lualatex">LuaLaTeX</option>
+            </select>
+          </label>
+          <label>Tema editor
+            <select id="editorTheme" title="Palette colori dell'editor"></select>
+          </label>
+        </div>
+      </div>
       <div id="presence" class="presence" aria-label="Chi è online su questo progetto"></div>
       <span id="collabState" class="status idle" title="Stato collaborazione real-time">…</span>
-      <span id="status" class="status idle">Ready</span>
+      <span id="status" class="status idle">Pronto</span>
     </div>
   </header>
 
   <main class="workspace">
     <section class="pane files" id="filesPane">
       <div class="pane-head">
-        <span>Project</span>
+        <span>Progetto</span>
         <div class="pane-actions">
-          <button id="newFile" class="mini" title="New file">＋ file</button>
-          <button id="newFolder" class="mini" title="New folder">＋ folder</button>
+          <button id="newFile" class="mini" title="Nuovo file">＋ file</button>
+          <button id="newFolder" class="mini" title="Nuova cartella">＋ cartella</button>
         </div>
       </div>
       <ul id="tree" class="tree"></ul>
-      <div class="files-hint">Click a file to edit · hover a row for rename / delete</div>
+      <div class="files-hint">Clicca un file per aprirlo · passa sulla riga per rinominare o eliminare</div>
     </section>
 
     <div class="splitter" data-target="filesPane"></div>
@@ -71,7 +74,7 @@
 
     <section class="pane preview" id="previewPane">
       <div class="pane-head">
-        <span>Preview</span>
+        <span>Anteprima</span>
         <div class="pane-actions">
           <button id="tabPdf" class="tabbtn active">PDF</button>
           <button id="tabLog" class="tabbtn">Log</button>
