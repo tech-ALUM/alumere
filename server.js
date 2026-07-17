@@ -648,6 +648,50 @@ app.delete("/api/projects/:id", requireUser, async (req, res) => {
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Create a blank project from a minimal template — the "start from zero" path
+// (until now the only way in was uploading a .zip). The title carries the project
+// name, escaped for LaTeX so a "&" or "%" in the name can't break the first compile.
+const texEscape = (s) => String(s)
+  .replace(/\\/g, "\\textbackslash{}")
+  .replace(/([%&$#_{}])/g, "\\$1")
+  .replace(/~/g, "\\textasciitilde{}")
+  .replace(/\^/g, "\\textasciicircum{}");
+app.post("/api/projects", requireUser, async (req, res) => {
+  const name = String((req.body || {}).name || "").trim().slice(0, 120) || "Nuovo progetto";
+  const id = crypto.randomUUID();
+  try {
+    const main = [
+      "\\documentclass[11pt]{article}",
+      "\\usepackage[utf8]{inputenc}",
+      "\\usepackage[T1]{fontenc}",
+      "\\usepackage{amsmath, amssymb}",
+      "\\usepackage{graphicx}",
+      "\\usepackage{hyperref}",
+      "",
+      `\\title{${texEscape(name)}}`,
+      `\\author{${texEscape((req.user && req.user.name) || "")}}`,
+      "\\date{\\today}",
+      "",
+      "\\begin{document}",
+      "\\maketitle",
+      "",
+      "\\section{Introduzione}",
+      "Scrivi qui.",
+      "",
+      "\\end{document}",
+      "",
+    ].join("\n");
+    await mkdir(filesDir(id), { recursive: true });
+    await writeFile(path.join(filesDir(id), "main.tex"), main, "utf8");
+    const now = new Date().toISOString();
+    await writeMeta(id, { id, name, createdAt: now, updatedAt: now, createdBy: briefUser(req.user), updatedBy: briefUser(req.user) });
+    res.json({ ok: true, id, name });
+  } catch (e) {
+    await rm(projectDir(id), { recursive: true, force: true }).catch(() => {});
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Upload a .zip (base64 in JSON) -> new project.
 app.post("/api/projects/upload", requireUser, async (req, res) => {
   const { name, zip } = req.body || {};

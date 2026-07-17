@@ -15,8 +15,9 @@
     </div>
     <div class="toolbar">
       <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
-      <button id="uploadBtn" class="btn primary"><span class="ic">⬆</span> Carica .zip</button>
-      <span id="archStatus" class="status idle">&nbsp;</span>
+      <button id="newProjBtn" class="btn primary"><span class="ic">＋</span> Nuovo progetto</button>
+      <button id="uploadBtn" class="btn" title="Crea un progetto da un archivio .zip esistente"><span class="ic">⬆</span> Carica .zip</button>
+      <span id="archStatus" class="status idle"></span>
     </div>
   </header>
 
@@ -28,7 +29,7 @@
     <div id="grid" class="proj-grid"></div>
     <div id="empty" class="proj-empty hidden">
       <p>Nessun progetto ancora.</p>
-      <p class="muted">Carica un archivio <b>.zip</b> di un progetto LaTeX per iniziare.</p>
+      <p class="muted">Crea un <b>nuovo progetto</b> o carica un archivio <b>.zip</b> di un progetto LaTeX.</p>
     </div>
   </main>
 
