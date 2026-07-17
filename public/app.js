@@ -93,7 +93,7 @@ function colorFor(seed) {
 const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
 const openPathEl = $("openPath"), presenceEl = $("presence");
-const pdfFrame = $("pdf"), logEl = $("log"), previewEmpty = $("previewEmpty");
+const pdfFrame = $("pdf"), logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
 const engineSel = $("engine");
 
 let currentPath = null;            // path of the open file (null = nothing open)
@@ -447,6 +447,105 @@ function renderLog(text) {
     logEl.appendChild(span);
   }
 }
+// ---------- LaTeX log → readable problem list ----------
+// latexmk runs with -file-line-error, so real errors arrive as "./file.tex:27: message".
+// Errors without a location ("! LaTeX Error: …") try to pick a line from the "l.27" context
+// that follows. Warnings ("LaTeX Warning: …") carry no file, so they render without a jump
+// (guessing the file and landing the cursor in the wrong one would be worse than no link).
+function parseLatexLog(log) {
+  const issues = [], seen = new Set(), lines = (log || "").split("\n");
+  const push = (kind, file, line, msg) => {
+    msg = msg.trim().replace(/\s+/g, " ").slice(0, 300);
+    if (!msg) return;
+    const key = `${kind}|${file}|${line}|${msg}`;
+    if (seen.has(key) || issues.length >= 50) return;
+    seen.add(key);
+    issues.push({ kind, file, line, msg });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let m = ln.match(/^(?:\.\/)?([^:\s]+\.(?:tex|sty|cls|bib|bbl)):(\d+):\s*(.*)$/);
+    if (m) {
+      let msg = m[3];
+      // "Undefined control sequence." tells you nothing without the "l.27 \foo" context
+      // that follows a few lines below — append the offending snippet when we find it.
+      for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+        const lm = lines[j].match(/^l\.\d+\s+(.*)$/);
+        if (lm && lm[1].trim()) { msg += ` → ${lm[1].trim()}`; break; }
+        if (/^(?:\.\/)?[^:\s]+:(\d+):/.test(lines[j])) break;
+      }
+      push("error", m[1].replace(/^\.\//, ""), Number(m[2]), msg);
+      continue;
+    }
+    m = ln.match(/^!\s*(.+)$/);
+    if (m) {
+      let line = null;
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+        const lm = lines[j].match(/^l\.(\d+)/);
+        if (lm) { line = Number(lm[1]); break; }
+      }
+      push("error", null, line, m[1]);
+      continue;
+    }
+    m = ln.match(/^(?:LaTeX|Package|Class)(?:\s+\S+)?\s+Warning:\s*(.*)$/);
+    if (m) {
+      let msg = m[1];
+      // warnings wrap onto continuation lines that start with matching indentation
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        if (/^\s{4,}\S/.test(lines[j])) { msg += " " + lines[j].trim(); i = j; }
+        else break;
+      }
+      const lm = msg.match(/on input line (\d+)/);
+      push("warning", null, lm ? Number(lm[1]) : null, msg);
+    }
+  }
+  return issues;
+}
+
+// Move the editor to file:line (used by the problem rows). openFile is synchronous, so the
+// fresh view is ready to receive the selection right after the switch.
+function gotoIssue(file, line) {
+  if (file && hasPath(file) && currentPath !== file) openFile(file);
+  if (!view || !line || (file && !hasPath(file))) return;
+  const doc = view.state.doc;
+  const pos = doc.line(Math.max(1, Math.min(line, doc.lines))).from;
+  view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  view.focus();
+}
+
+function renderIssues(issues) {
+  issuesEl.innerHTML = "";
+  issuesEl.classList.toggle("hidden", !issues.length);
+  const tab = $("tabLog");
+  tab.textContent = "Log";
+  const nErr = issues.filter((x) => x.kind === "error").length;
+  if (nErr) {
+    const b = document.createElement("span");
+    b.className = "tab-badge"; b.textContent = nErr;
+    tab.appendChild(b);
+  }
+  for (const it of issues) {
+    const canJump = !!(it.line && (!it.file || hasPath(it.file)));
+    const row = document.createElement(canJump ? "button" : "div");
+    row.className = `issue ${it.kind}` + (canJump ? " link" : "");
+    if (canJump) row.type = "button";
+    const badge = document.createElement("span");
+    badge.className = "issue-badge";
+    badge.textContent = it.kind === "error" ? "errore" : "avviso";
+    const msg = document.createElement("span");
+    msg.className = "issue-msg"; msg.textContent = it.msg;
+    row.append(badge, msg);
+    if (it.file || it.line) {
+      const loc = document.createElement("span");
+      loc.className = "issue-loc";
+      loc.textContent = (it.file || "") + (it.line ? `:${it.line}` : "");
+      row.appendChild(loc);
+    }
+    if (canJump) row.addEventListener("click", () => gotoIssue(it.file, it.line));
+    issuesEl.appendChild(row);
+  }
+}
+
 let pdfUrl = null, pdfBlob = null;
 async function compile() {
   setStatus("busy", "Compiling…");
@@ -456,6 +555,8 @@ async function compile() {
     const res = await fetch("/api/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json();
     renderLog(data.log);
+    const issues = parseLatexLog(data.log);
+    renderIssues(issues);
     if (data.ok && data.pdf) {
       if (pdfUrl) URL.revokeObjectURL(pdfUrl);
       pdfBlob = b64ToBlob(data.pdf, "application/pdf");
@@ -463,10 +564,15 @@ async function compile() {
       pdfFrame.src = pdfUrl;
       previewEmpty.classList.add("hidden");
       showTab("pdf");
-      setStatus("ok", "Compiled ✓");
-    } else { setStatus("err", "Errors"); showTab("log"); }
+      setStatus("ok", "Compilato ✓");
+    } else {
+      const nErr = issues.filter((x) => x.kind === "error").length;
+      setStatus("err", nErr ? `${nErr} error${nErr === 1 ? "e" : "i"}` : "Errori");
+      showTab("log");
+    }
   } catch (e) {
-    renderLog("Could not reach the compile server.\nIs it running?  →  " + e.message);
+    renderLog("Il server di compilazione non risponde.\n→ " + e.message);
+    renderIssues([]);
     setStatus("err", "Offline"); showTab("log");
   }
 }
@@ -475,7 +581,7 @@ async function compile() {
 function showTab(which) {
   const pdf = which === "pdf";
   pdfFrame.classList.toggle("hidden", !pdf);
-  logEl.classList.toggle("hidden", pdf);
+  logWrap.classList.toggle("hidden", pdf);
   if (pdf) previewEmpty.classList.toggle("hidden", !!pdfUrl);
   else previewEmpty.classList.add("hidden");
   $("tabPdf").classList.toggle("active", pdf);

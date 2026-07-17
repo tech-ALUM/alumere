@@ -211,12 +211,40 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 /* ---------- Preview ---------- */
 .preview-body { position: relative; flex: 1; min-height: 0; background: #525659; }
 .pdf { width: 100%; height: 100%; border: 0; background: #525659; }
+.logwrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .log {
-  position: absolute; inset: 0; margin: 0; padding: 12px 14px; overflow: auto;
+  flex: 1 1 auto; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto;
   background: #16202b; color: #d6e2ea; font-family: var(--mono);
   font-size: 12px; line-height: 1.5; white-space: pre-wrap;
 }
 .log .errline { color: #ff9b88; }
+
+/* Parsed problems from the LaTeX log: a readable list above the raw log. A row with a
+   known file+line is clickable and jumps the editor there. */
+.issues {
+  flex: 0 0 auto; max-height: 45%; overflow: auto;
+  background: var(--panel); border-bottom: 2px solid var(--line);
+}
+.issue {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 7px 12px; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; text-align: left; font-size: 12.5px; color: var(--ink);
+  cursor: default;
+}
+.issue.link { cursor: pointer; }
+.issue.link:hover { background: var(--accent-soft); }
+.issue-badge {
+  flex: 0 0 auto; font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 6px; border-radius: 999px; color: #fff;
+}
+.issue.error .issue-badge { background: var(--coral); color: #5a1a10; }
+.issue.warning .issue-badge { background: var(--orange); color: #5a3a06; }
+.issue-msg { flex: 1 1 auto; min-width: 0; line-height: 1.4; word-break: break-word; }
+.issue-loc { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.tab-badge {
+  display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; background: var(--coral); color: #5a1a10;
+}
 .preview-empty {
   position: absolute; inset: 0; display: grid; place-items: center;
   color: #cdd5da; font-size: 14px; background: #525659;
