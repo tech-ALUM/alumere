@@ -7,6 +7,66 @@
 
 ---
 
+## 2026-07-17 (ter) — Giro UX: home, errori LaTeX, tema scuro, anteprima PDF.js ✅
+
+Primo grosso giro dedicato a **interfaccia ed esperienza d'uso** (nessuna nuova logica di
+dominio; la sicurezza giro 2 resta in pausa, per scelta di Tommy). Solo file client + un
+endpoint. Sei commit su `main`, tutti verificati in browser.
+
+**Cosa c'è ora**
+- **Home** (`96d1af4`): bottone **＋ Nuovo progetto** che crea un progetto vuoto da template
+  minimo (`POST /api/projects`; titolo = nome escapato per LaTeX, autore = chi crea) — prima
+  l'unico ingresso era il `.zip`. Card **cliccabile** (click o Invio); **Elimina** declassato a
+  controllo d'angolo visibile solo su hover.
+- **Errori LaTeX leggibili** (`0315673`): `parseLatexLog` trasforma il log grezzo in una **lista
+  cliccabile** sopra al log (badge errore/avviso, posizione); una riga con file+riga nota è un
+  bottone che **apre il file e porta il cursore lì**. Chip di stato "N errori" + badge sul tab Log.
+- **Toolbar snellita + lingua** (`b7b141a`): Motore LaTeX e Tema editor spostati in un **menu ⚙**;
+  interfaccia **tutta in italiano** su entrambe le pagine (`lang=it`).
+- **Tema scuro dell'intera app** (`df54861`, poi esteso): variabili `--panel/--ink/--line/…` con
+  gemello scuro, attivato da `prefers-color-scheme` (auto) o da `data-app-theme` (scelta esplicita),
+  riapplicato **prima del primo paint** da uno script inline (niente flash). Selettore **Aspetto**
+  (auto/chiaro/scuro). *Nota:* la superficie dell'**editor** ha una palette propria (Tema editor),
+  quindi in dark resta chiara finché non si sceglie Slate Dark/Nord — lasciato così di proposito.
+- **Tre fix dal campo** (`e61d476`): (1) Aspetto anche dalla **home**, non solo dentro un progetto
+  → logica estratta in **`public/theme.js` condiviso** (cabla `#appTheme` + il menu ⚙; preferenza
+  unica per le due pagine). (2) **Trascinamento** editor/anteprima che si bloccava: era l'iframe
+  del PDF che ingoiava gli eventi → `body.dragging` disattiva i pointer-event sull'anteprima durante
+  il drag. (3) Prima versione dello zoom del solo PDF.
+- **Anteprima PDF.js** (`1103756`): lo zoom "a stage" sull'iframe posizionava male la pagina e non
+  era fluido. Sostituito con **PDF.js su `<canvas>`**, vendorizzato in **`public/vendor/pdfjs/`**
+  (Apache-2.0, no CDN a runtime). Rendering nitido a `devicePixelRatio`, pagina centrata;
+  **100% = adatta larghezza**, zoom = moltiplicatore **continuo**. **Pinch trackpad** (il Mac lo
+  manda come `wheel+ctrlKey`) o ⌘/Ctrl+wheel → zoom fluido **ancorato al cursore**, valori fini a
+  piacere (47%, 231%…). Bottoni −/adatta/＋, range 10–500%. Feedback immediato via transform CSS
+  durante il gesto, **re-render nitido** all'assestamento.
+
+**Scelte (e perché)**
+- **`theme.js` condiviso** invece di duplicare: home ed editor cablano gli stessi controlli; una
+  sola preferenza in `localStorage`. Il menu ⚙ e il suo Esc-per-chiudere vivono lì; app.js tiene
+  solo Esc-per-cronologia e Cmd/Ctrl+S (non si accavallano: cronologia e menu non sono mai aperti
+  insieme).
+- **PDF.js, render SERIALIZZATI**: due `page.render()` concorrenti sulla **stessa** pagina PDF.js
+  confliggono e lasciavano il canvas bloccato/sfocato (inciampo vero, costato un paio di giri). La
+  soluzione robusta è un solo render alla volta, con **re-run** sull'ultimo zoom se ne arriva un
+  altro durante — niente token/cancel, niente race.
+- **Zoom = CSS transform durante il gesto + re-render crisp al fermo**: fluido *e* nitido, come i
+  visualizzatori seri. `100% = fit-width` segue il ridimensionamento del riquadro (ResizeObserver).
+- **Bonus**: renderizzando su canvas (non più col plugin PDF nativo) l'anteprima **si vede anche nel
+  browser di test** headless — d'ora in poi l'anteprima è verificabile a schermo, non solo a sonde.
+
+**Verificato** (dev container :3000, browser reale): creazione progetto (nome con `& %` escapato,
+gate 401), card cliccabile, delete d'angolo; errore LaTeX finto → riga cliccabile che salta a
+`main.tex:26`, percorso verde "Compilato ✓"; menu ⚙ + Esc; Aspetto cambia dalla home ed è condiviso
+coi due sensi; drag fino in fondo all'anteprima senza stalli; **anteprima PDF.js nitida** a 46/100/
+198/230%, pinch continuo ancorato al cursore, reset a 100%, scroll normale invariato. Console pulita.
+
+**Prossimo**: altri appunti UX di Tommy (in arrivo). ⚠️ **Non è live**: PDF.js si carica come modulo
+statico → **nessun rebuild del bundle**, ma serve comunque il **pull+rebuild sul VPS** (lo fa Albi)
+per portare online tutto il giro.
+
+---
+
 ## 2026-07-17 (bis) — Smoke test end-to-end committato ✅
 
 Finora gli harness di verifica erano script usa-e-getta ricostruiti a ogni sessione; ora c'è
