@@ -260,7 +260,29 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 
 /* ---------- Preview ---------- */
 .preview-body { position: relative; flex: 1; min-height: 0; background: #525659; }
-.pdf { width: 100%; height: 100%; border: 0; background: #525659; }
+/* PDF zoom: the stage is the box we grow (JS sets its width/height %); the scroll wrapper
+   scrolls it. The embedded viewer fits the page to the iframe width, so a bigger stage =
+   a crisply re-rendered bigger page (no blurry CSS scaling). */
+.pdf-scroll { position: absolute; inset: 0; overflow: auto; background: #525659; }
+.pdf-scroll.hidden { display: none !important; }
+.pdf-stage { width: 100%; height: 100%; }
+.pdf { width: 100%; height: 100%; border: 0; display: block; background: #525659; }
+
+/* Zoom controls, shown only over the PDF tab. */
+.zoombar { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
+.zoombtn, .zoomlabel {
+  font: 600 12px/1 var(--ui-font); color: var(--muted);
+  border: 1px solid var(--line); background: var(--panel);
+  padding: 3px 7px; border-radius: 5px; text-transform: none; letter-spacing: 0;
+}
+.zoombtn { min-width: 24px; }
+.zoomlabel { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
+.zoombtn:hover, .zoomlabel:hover { background: var(--accent-soft); color: var(--accent-d); }
+
+/* While a splitter is being dragged: freeze the cursor, kill text selection, and stop the
+   PDF iframe from swallowing the mouse events (which would stall the drag). */
+body.dragging { cursor: col-resize; user-select: none; }
+body.dragging .pdf { pointer-events: none; }
 .logwrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .log {
   flex: 1 1 auto; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto;

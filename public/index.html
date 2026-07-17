@@ -19,6 +19,18 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
       <button id="newProjBtn" class="btn primary"><span class="ic">＋</span> Nuovo progetto</button>
       <button id="uploadBtn" class="btn" title="Crea un progetto da un archivio .zip esistente"><span class="ic">⬆</span> Carica .zip</button>
+      <div class="menu" id="settingsMenu">
+        <button id="settingsBtn" class="btn" title="Impostazioni (aspetto)" aria-haspopup="true">⚙</button>
+        <div class="menu-pop" hidden>
+          <label>Aspetto
+            <select id="appTheme" title="Tema chiaro/scuro dell'interfaccia">
+              <option value="auto" selected>Auto (sistema)</option>
+              <option value="light">Chiaro</option>
+              <option value="dark">Scuro</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <span id="archStatus" class="status idle"></span>
     </div>
   </header>
@@ -36,6 +48,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
   </main>
 
   <script src="auth.js"></script>
+  <script src="theme.js"></script>
   <script src="archive.js"></script>
 </body>
 </html>

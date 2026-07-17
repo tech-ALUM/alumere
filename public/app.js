@@ -94,6 +94,7 @@ const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
 const openPathEl = $("openPath"), presenceEl = $("presence");
 const pdfFrame = $("pdf"), logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
+const pdfScroll = $("pdfScroll"), pdfStage = $("pdfStage");
 const engineSel = $("engine");
 
 let currentPath = null;            // path of the open file (null = nothing open)
@@ -131,25 +132,7 @@ function initEditorTheme() {
   applyEditorTheme(saved);
 }
 
-// ---------- App theme (whole chrome: light / dark / follow the system) ----------
-// Separate from the editor palette on purpose: the CSS dark block keys off
-// data-app-theme on <html>, and a head script on both pages re-applies the saved
-// value before first paint. "auto" = no attribute → the prefers-color-scheme
-// media block decides.
-const APP_THEME_KEY = "alumere.appTheme";
-function applyAppTheme(v) {
-  if (v === "dark" || v === "light") document.documentElement.dataset.appTheme = v;
-  else delete document.documentElement.dataset.appTheme;
-  try { localStorage.setItem(APP_THEME_KEY, v); } catch {}
-}
-function initAppTheme() {
-  const sel = $("appTheme");
-  let saved = "auto";
-  try { saved = localStorage.getItem(APP_THEME_KEY) || "auto"; } catch {}
-  if (!["auto", "light", "dark"].includes(saved)) saved = "auto";
-  if (sel) { sel.value = saved; sel.addEventListener("change", () => applyAppTheme(sel.value)); }
-  applyAppTheme(saved);
-}
+// App theme (chiaro/scuro/auto) e menu ⚙ sono gestiti da theme.js, condiviso con la home.
 
 // ---------- File model over the shared Y.Map ----------
 function isBinaryVal(v) { return !(v instanceof Y.Text); }
@@ -600,12 +583,37 @@ async function compile() {
 // ---------- Preview tabs ----------
 function showTab(which) {
   const pdf = which === "pdf";
-  pdfFrame.classList.toggle("hidden", !pdf);
+  pdfScroll.classList.toggle("hidden", !pdf);
   logWrap.classList.toggle("hidden", pdf);
   if (pdf) previewEmpty.classList.toggle("hidden", !!pdfUrl);
   else previewEmpty.classList.add("hidden");
   $("tabPdf").classList.toggle("active", pdf);
   $("tabLog").classList.toggle("active", !pdf);
+  $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfUrl);
+}
+
+// ---------- PDF zoom (only the preview, never the whole page) ----------
+// The embedded PDF viewer fits the page to its iframe's width. So we don't zoom the page
+// or CSS-scale a raster (which blurs): we grow the iframe's own box inside a scroll wrapper,
+// and the native viewer re-renders the page crisply at the larger size. `.pdf-stage` is the
+// box we resize; `.pdf-scroll` scrolls it. 1.0 = fit-width (the natural size).
+const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_STEP = 0.25;
+let pdfZoom = 1;
+function applyPdfZoom() {
+  if (!pdfStage) return;
+  pdfStage.style.width = Math.round(pdfZoom * 100) + "%";
+  pdfStage.style.height = Math.round(pdfZoom * 100) + "%";
+  const lbl = $("pdfZoomLabel");
+  if (lbl) lbl.textContent = Math.round(pdfZoom * 100) + "%";
+}
+function setZoom(z) { pdfZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(z * 100) / 100)); applyPdfZoom(); }
+function setupZoom() {
+  const bar = $("pdfZoomBar");
+  if (!bar) return;
+  $("zoomOut").addEventListener("click", () => setZoom(pdfZoom - ZOOM_STEP));
+  $("zoomIn").addEventListener("click", () => setZoom(pdfZoom + ZOOM_STEP));
+  $("zoomReset").addEventListener("click", () => setZoom(1));
+  applyPdfZoom();
 }
 
 // ---------- Splitters ----------
@@ -618,13 +626,20 @@ function setupSplitters() {
       e.preventDefault();
       const startX = e.clientX, startFilesW = filesW, startFrac = editorFrac;
       const avail = () => workspace.clientWidth - filesW - 12;
+      // While dragging over the PDF iframe, the iframe swallows mousemove/mouseup and the
+      // drag stalls. body.dragging disables pointer-events on it (see styles.css) so every
+      // move keeps reaching us, and freezes the cursor to col-resize + kills text selection.
+      document.body.classList.add("dragging");
       const move = (ev) => {
         const dx = ev.clientX - startX;
         if (i === 0) filesW = Math.max(160, Math.min(520, startFilesW + dx));
         else { const startEditorPx = startFrac * avail(); editorFrac = Math.max(0.2, Math.min(0.8, (startEditorPx + dx) / avail())); }
         applyLayout();
       };
-      const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+      const up = () => {
+        document.body.classList.remove("dragging");
+        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+      };
       document.addEventListener("mousemove", move);
       document.addEventListener("mouseup", up);
     });
@@ -1204,7 +1219,6 @@ async function init() {
   $("projName").textContent = meta.name || "Progetto";
   document.title = (meta.name || "Progetto") + " — Alumère";
   initEditorTheme();
-  initAppTheme();
 
   if (!window.YCOLLAB) {
     setConnState("broken", "collab non disponibile");   // not "offline": nothing here will sync later
@@ -1250,18 +1264,11 @@ async function init() {
   $("history").addEventListener("click", openHistory);
   $("histClose").addEventListener("click", closeHistory);
   $("histCheckpoint").addEventListener("click", checkpointNow);
-  // Settings dropdown (⚙): toggle on the button, close on outside click or Esc.
-  const settingsPop = document.querySelector("#settingsMenu .menu-pop");
-  $("settingsBtn").addEventListener("click", (e) => { e.stopPropagation(); settingsPop.hidden = !settingsPop.hidden; });
-  document.addEventListener("click", (e) => {
-    if (!settingsPop.hidden && !settingsPop.contains(e.target)) settingsPop.hidden = true;
-  });
+  // The ⚙ menu (toggle / outside-click / Esc-to-close) is wired by theme.js. Here we only
+  // keep Esc-closes-history and the Cmd/Ctrl+S compile shortcut.
+  setupZoom();
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      if (!settingsPop.hidden) { settingsPop.hidden = true; return; }
-      if (!$("historyOverlay").hidden) { closeHistory(); return; }
-      return;
-    }
+    if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
   });
 }

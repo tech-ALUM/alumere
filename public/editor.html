@@ -85,12 +85,21 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <div class="pane-head">
         <span>Anteprima</span>
         <div class="pane-actions">
+          <div id="pdfZoomBar" class="zoombar hidden">
+            <button id="zoomOut" class="zoombtn" title="Riduci">−</button>
+            <button id="zoomReset" class="zoomlabel" title="Adatta alla larghezza"><span id="pdfZoomLabel">100%</span></button>
+            <button id="zoomIn" class="zoombtn" title="Ingrandisci">＋</button>
+          </div>
           <button id="tabPdf" class="tabbtn active">PDF</button>
           <button id="tabLog" class="tabbtn">Log</button>
         </div>
       </div>
       <div class="preview-body">
-        <iframe id="pdf" class="pdf" title="PDF compilato"></iframe>
+        <div id="pdfScroll" class="pdf-scroll">
+          <div id="pdfStage" class="pdf-stage">
+            <iframe id="pdf" class="pdf" title="PDF compilato"></iframe>
+          </div>
+        </div>
         <div id="logWrap" class="logwrap hidden">
           <div id="issues" class="issues hidden"></div>
           <pre id="log" class="log"></pre>
@@ -118,6 +127,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
   </div>
 
   <script src="auth.js"></script>
+  <script src="theme.js"></script>
   <script src="vendor/codemirror.js"></script>
   <script type="module" src="app.js"></script>
 </body>
