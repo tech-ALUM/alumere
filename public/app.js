@@ -131,6 +131,26 @@ function initEditorTheme() {
   applyEditorTheme(saved);
 }
 
+// ---------- App theme (whole chrome: light / dark / follow the system) ----------
+// Separate from the editor palette on purpose: the CSS dark block keys off
+// data-app-theme on <html>, and a head script on both pages re-applies the saved
+// value before first paint. "auto" = no attribute → the prefers-color-scheme
+// media block decides.
+const APP_THEME_KEY = "alumere.appTheme";
+function applyAppTheme(v) {
+  if (v === "dark" || v === "light") document.documentElement.dataset.appTheme = v;
+  else delete document.documentElement.dataset.appTheme;
+  try { localStorage.setItem(APP_THEME_KEY, v); } catch {}
+}
+function initAppTheme() {
+  const sel = $("appTheme");
+  let saved = "auto";
+  try { saved = localStorage.getItem(APP_THEME_KEY) || "auto"; } catch {}
+  if (!["auto", "light", "dark"].includes(saved)) saved = "auto";
+  if (sel) { sel.value = saved; sel.addEventListener("change", () => applyAppTheme(sel.value)); }
+  applyAppTheme(saved);
+}
+
 // ---------- File model over the shared Y.Map ----------
 function isBinaryVal(v) { return !(v instanceof Y.Text); }
 function fileEntries() { return filesMap ? [...filesMap.entries()] : []; }   // snapshot: safe to mutate while iterating
@@ -1184,6 +1204,7 @@ async function init() {
   $("projName").textContent = meta.name || "Progetto";
   document.title = (meta.name || "Progetto") + " — Alumère";
   initEditorTheme();
+  initAppTheme();
 
   if (!window.YCOLLAB) {
     setConnState("broken", "collab non disponibile");   // not "offline": nothing here will sync later

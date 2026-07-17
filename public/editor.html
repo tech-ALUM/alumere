@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Editor — Alumère</title>
+<script>/* apply the saved app theme before first paint (auto = follow the system) */
+try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")document.documentElement.dataset.appTheme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -32,6 +34,13 @@
           </label>
           <label>Tema editor
             <select id="editorTheme" title="Palette colori dell'editor"></select>
+          </label>
+          <label>Aspetto
+            <select id="appTheme" title="Tema chiaro/scuro dell'interfaccia">
+              <option value="auto" selected>Auto (sistema)</option>
+              <option value="light">Chiaro</option>
+              <option value="dark">Scuro</option>
+            </select>
           </label>
         </div>
       </div>
