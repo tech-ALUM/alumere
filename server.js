@@ -443,6 +443,68 @@ function countChanged(v, prev) {
   return n;
 }
 
+// ---------- history retention + blob GC ----------
+// Retention: old *auto* versions expire after HISTORY_RETENTION_DAYS (0 = keep forever).
+// Milestones survive regardless of age — anything labeled or of a deliberate kind
+// (initial / checkpoint / restore) — and so do the newest HISTORY_RETENTION_KEEP versions,
+// so an untouched project never loses its whole recent timeline to the calendar.
+// GC: a periodic sweep applies retention, then deletes every object no surviving version
+// references (retention fallout, amend leftovers after a crash) plus stale temp files.
+// It runs under the same per-project lock as recordVersion, so a store can't interleave:
+// while we hold the lock, any blob on disk but absent from the index is genuinely garbage.
+const HISTORY_RETENTION_DAYS = Math.max(0, Number(process.env.HISTORY_RETENTION_DAYS ?? 90) || 0);
+const HISTORY_RETENTION_KEEP = Math.max(0, Number(process.env.HISTORY_RETENTION_KEEP ?? 10) || 0);
+const HISTORY_GC_INTERVAL_MS = (Number(process.env.HISTORY_GC_INTERVAL_H) || 6) * 60 * 60 * 1000;
+
+// Drop expired auto versions from the index (in place). Returns how many were removed.
+function pruneExpiredVersions(index) {
+  if (!HISTORY_RETENTION_DAYS) return 0;
+  const cutoff = Date.now() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const total = index.versions.length;
+  const kept = index.versions.filter((v, i) =>
+    v.kind !== "auto" || v.label
+    || total - i <= HISTORY_RETENTION_KEEP
+    || !(Date.parse(v.at) < cutoff));                // NaN-safe: an unparsable date is kept
+  const removed = total - kept.length;
+  if (removed) index.versions = kept;
+  return removed;
+}
+
+// One project's sweep: retention, then delete unreferenced objects and stray temp files.
+async function gcProjectHistory(id) {
+  return withHistoryLock(id, async () => {
+    const index = await readHistoryIndex(id);
+    const removed = pruneExpiredVersions(index);
+    if (removed) await writeHistoryIndex(id, index);
+    const referenced = new Set();
+    for (const v of index.versions) for (const f of v.files || []) referenced.add(f.sha);
+    let dropped = 0;
+    let names = [];
+    try { names = await readdir(objectsDir(id)); } catch { return { removed, dropped }; }
+    for (const name of names) {
+      if (HEX64_RE.test(name) ? referenced.has(name) : !name.includes(".tmp-")) continue;
+      await rm(objectPath(id, name), { force: true }).catch(() => {});
+      dropped++;
+    }
+    return { removed, dropped };
+  });
+}
+
+async function historyGcSweep() {
+  let dirs = [];
+  try { dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory()); }
+  catch { return; }
+  let versions = 0, blobs = 0;
+  for (const d of dirs) {
+    if (!validId(d.name)) continue;
+    try {
+      const r = await gcProjectHistory(d.name);
+      versions += r.removed; blobs += r.dropped;
+    } catch (e) { console.warn(`[alumere] history gc failed for "${d.name}": ${e.message}`); }
+  }
+  if (versions || blobs) console.log(`[alumere] history gc: pruned ${versions} versions, ${blobs} orphan blobs`);
+}
+
 // ---------- session endpoints ----------
 app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
 
@@ -903,6 +965,11 @@ async function attachCollab(httpServer) {
 
 const httpServer = app.listen(PORT, async () => {
   await seedSample().catch((e) => console.warn("[alumere] seed failed:", e.message));
+  // History housekeeping: one sweep shortly after boot (catches crash leftovers), then
+  // periodic. unref() so neither timer keeps the process alive on shutdown.
+  const gc = () => historyGcSweep().catch((e) => console.warn(`[alumere] history gc sweep failed: ${e.message}`));
+  setTimeout(gc, 15_000).unref();
+  setInterval(gc, HISTORY_GC_INTERVAL_MS).unref();
   console.log(`Alumère draft running →  http://localhost:${PORT}`);
 });
 attachCollab(httpServer);
