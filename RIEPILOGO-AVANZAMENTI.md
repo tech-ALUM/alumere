@@ -7,6 +7,61 @@
 
 ---
 
+## 2026-07-18 (ter) — Parità Overleaf, giro 1/5: rinomina progetto ✅
+
+Nuovo arco di lavoro: **portare 5 cose di Overleaf** dentro Alumère (Tommy ha girato screenshot).
+Piano concordato + **cadenza decisa insieme**: *una feature → verifica in browser → commit+push su
+`main` → nuova sessione* per la successiva (sessioni pulite, ogni push è uno stato funzionante che
+Albi porta live quando vuole).
+
+**Le 5 feature (ordine consigliato) e le decisioni prese (D1/D2/D3):**
+1. **Rinomina progetto** — *(questo giro)*.
+2. **Tab multi-file** in alto (apri più file → tab; solo client, niente rebuild). *(prossimo)*
+3. **SyncTeX** forward (editor→PDF) + inverse (doppio click PDF→sorgente). **D3 = parse client-side**
+   (gunzip in browser via `DecompressionStream`, stateless; `-synctex=1` al compile).
+4. **Commenti** stile Word (selezione→commento ancorato, @menzione *actionee*, email). **D1 = ancoraggio
+   best-effort offset+snippet** (le relative-position Yjs non sopravvivono al rebuild del doc da disco).
+   **D2 = `users.json` popolato al login** come anagrafica per le @menzioni (base anche per gli ACL futuri).
+   ⚠️ È l'unica feature che richiede il **rebuild del bundle CM6** (decorazioni) → da committare a mano.
+5. **Review panel + Chat** (chat = nuovo tipo Yjs `getArray("chat")` + `chat.json`, semplice; panel = UI dei commenti).
+
+**Vincolo scoperto leggendo il codice:** il Dockerfile fa `npm ci --omit=dev` + `COPY . .` → CM6/esbuild
+sono **devDependencies**, quindi l'immagine **NON** ricostruisce `public/vendor/codemirror.js`: usa quello
+**committato**. Perciò un cambio al bundle (solo i commenti) = rebuild in container Node usa-e-getta +
+**commit del bundle**; il VPS lo copia e basta.
+
+**Cosa c'è ora (giro 1 — rinomina):**
+- **Endpoint dedicato** `POST /api/projects/:id/rename {name}` (server.js). **Non** riuso `PUT /api/projects/:id`:
+  quello fa `writeFiles` = `rm -rf files/` + riscrive da `files||[]`, quindi un PUT col solo `name`
+  **svuoterebbe il progetto**. L'endpoint tocca solo `meta.name` (trim, cap 120) e **non bumpa `updatedAt`**
+  (rinominare non è modifica di contenuto — come archivia/tag).
+- **Editor** (`editor.html`+`app.js`+`styles.css`): il nome in topbar è un **menu a tendina** (`✎ Rename project`,
+  stile del menu ⚙) → click apre l'**input inline** (Invio o clic-fuori = salva, Esc = annulla). Ottimistico con
+  revert su errore; aggiorna nome **e** `document.title`.
+- **Mirror live ai peer**: al salvataggio il client fa anche `metaMap.set("name", …)` e c'è un `metaMap.observe`
+  → chi ha il progetto aperto vede il nuovo nome **dal vivo** (l'endpoint resta la fonte autorevole; il server
+  ignora la chiave "name" nello store, quindi niente bump di `updatedAt`).
+- **Home** (`archive.js`): nuova azione di riga **matita → Rename** (icona SVG uniforme, `prompt` + stesso endpoint).
+
+**Intoppo (risolto):** `.projname-btn { display:inline-flex }` **batteva** l'attributo `[hidden]`
+(la specificità dell'author-CSS vince sulla UA-rule di `[hidden]`) → il bottone non si nascondeva durante
+l'edit inline. Fix: `.projname-btn[hidden] { display:none }`. Scoperto in browser con una sonda JS.
+
+**Verificato** (container dev `:3000`, Node non è sull'host → tutto contro il container):
+- **Endpoint via curl E2E** (login magic-link → cookie → rename): nome cambia, **`updatedAt` invariato**,
+  **file NON cancellati**, casi d'errore **empty→400 / no-cookie→401 / id-inesistente→404**; `validId`
+  = `/^[A-Za-z0-9_-]{1,64}$/` → niente `.`/`/`, **no traversal**.
+- **Browser reale**: dropdown apre; input inline compare e **il bottone si nasconde** (post-fix); **Invio**
+  committa (evento reale → persiste su disco + aggiorna titolo/nome, input rimosso, bottone ripristinato) e
+  **blur** committa (clic fuori). Console pulita. Progetto riportato a "Sample paper" a fine test.
+  *(Nota: il tool del browser non dispatcha un keydown Enter reale all'input — verificato che il mio handler
+  parte con un `KeyboardEvent` vero; l'Invio degli utenti veri funziona.)*
+
+**Prossimo:** **giro 2 — Tab multi-file** (solo client, niente server/bundle; propedeutico a inverse-search e
+commenti cross-file). ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-18 (bis) — Interfaccia tutta in inglese + rifiniture home ✅
 
 Su richiesta di Tommy, **tutta l'interfaccia in inglese** (il testo/contenuto dei documenti può
