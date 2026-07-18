@@ -384,13 +384,15 @@ body.dragging .pdf-scroll { pointer-events: none; }
 .splitter::after { content: ""; position: absolute; inset: 0 2px; background: var(--line); }
 .splitter:hover::after { background: var(--accent); }
 
-/* SyncTeX forward button, riding the editor/PDF divider (Overleaf-style). */
+/* SyncTeX forward button, riding the editor/PDF divider (Overleaf-style),
+   a quarter of the way down — mid-bar melts into the splitter, top gets missed. */
 .sync-jump {
-  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-  width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
+  position: absolute; top: 25%; left: 50%; transform: translate(-50%, -50%);
+  width: 30px; height: 30px; display: grid; place-items: center; padding: 0;
   border: 1px solid var(--line); border-radius: 50%;
   background: var(--panel); color: var(--muted);
   cursor: pointer; z-index: 5;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
 }
 .sync-jump:hover { background: var(--accent-soft); color: var(--accent-d); border-color: var(--accent-d); }
 .sync-jump.hidden { display: none; }

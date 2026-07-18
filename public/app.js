@@ -927,16 +927,20 @@ function syncForward() {
   for (const l of lines) if (l >= line) { target = l; break; }
   if (target == null) target = lines[lines.length - 1];
   if (target == null) return;
-  // Among the line's records prefer real text boxes (h > 0) over bare glue/kern points:
-  // stray spacing attributed to the same line can sit well above the text itself.
+  // Among the line's records trust the POINTS and take their median: points track the
+  // line's own output position, while boxes attributed to a line often belong to the
+  // PREVIOUS visual line (a box closes where the next source line starts) and a stray
+  // end-of-line point sits on the previous line too — the median shrugs both off.
+  const recs = syncTex.byLoc.get(tag + ":" + target);
+  const pts = recs.filter((r) => !(r.h > 0));
   let best = null;
-  for (const r of syncTex.byLoc.get(tag + ":" + target)) {
-    if (best) {
-      const rBox = r.h > 0, bestBox = best.h > 0;
-      if (bestBox && !rBox) continue;              // never trade a box for a point
-      if (bestBox === rBox && (r.page > best.page || (r.page === best.page && r.y >= best.y))) continue;
+  if (pts.length) {
+    pts.sort((a, b) => (a.page - b.page) || (a.y - b.y));
+    best = pts[Math.floor(pts.length / 2)];
+  } else {
+    for (const r of recs) {
+      if (!best || r.page < best.page || (r.page === best.page && r.y < best.y)) best = r;
     }
-    best = r;
   }
   flashPdfSpot(best);
 }
@@ -951,13 +955,28 @@ function flashPdfSpot(r) {
   showTab("pdf");                                      // measuring needs the pane visible
   const vp = pdfPage.getViewport({ scale: 1 });
   const k = canvas.offsetHeight / vp.height;           // PDF pt → layout px at the current zoom
-  const above = r.h || 8, below = r.d || 3;            // point records get a default band
+  // Band extents: snug to the actual line box under the spot when there is one (the
+  // box's own line attribution doesn't matter here — only its geometry), else a
+  // text-line-ish default around the baseline.
+  let top = r.y - (r.h || 9), bottom = r.y + (r.d || 4);
+  const pg = syncTex && syncTex.pages.get(r.page);
+  if (pg) {
+    let bb = null, bestArea = Infinity;
+    for (const b of pg.boxes) {
+      if (!(b.h > 0) || b.h + b.d > 40) continue;      // line-sized boxes only
+      const x0 = Math.min(b.x, b.x + b.w), x1 = Math.max(b.x, b.x + b.w);
+      if (r.x < x0 || r.x > x1 || r.y < b.y - b.h || r.y > b.y + b.d) continue;
+      const area = (x1 - x0) * (b.h + b.d);
+      if (area < bestArea) { bestArea = area; bb = b; }
+    }
+    if (bb) { top = bb.y - bb.h - 1; bottom = bb.y + bb.d + 1; }
+  }
   const flash = document.createElement("div");
   flash.className = "sync-flash";
   flash.style.left = canvas.offsetLeft + "px";
   flash.style.width = canvas.offsetWidth + "px";
-  flash.style.top = canvas.offsetTop + (r.y - above) * k + "px";
-  flash.style.height = Math.max(6, (above + below) * k) + "px";
+  flash.style.top = canvas.offsetTop + top * k + "px";
+  flash.style.height = Math.max(6, (bottom - top) * k) + "px";
   for (const el of pagesEl.querySelectorAll(".sync-flash")) el.remove();
   pagesEl.appendChild(flash);
   const fr = flash.getBoundingClientRect(), sr = pdfScroll.getBoundingClientRect();
@@ -965,27 +984,34 @@ function flashPdfSpot(r) {
   setTimeout(() => flash.remove(), 1900);
 }
 
-// Inverse search: the smallest hbox containing the click wins (nested boxes → the
-// innermost is the most specific line). A click that hits no box (margins, gaps)
-// falls back to the nearest record, weighing vertical distance more — the target is
-// a line of text, so "same height" matters more than "same column".
-function syncInverse(page, x, y) {
+// Inverse search: the nearest POINT record wins. Points (kern/glue/current) are laid
+// down as the source line advances, so their line attribution tracks the visual line
+// closely; the enclosing hboxes instead carry the line where the paragraph ENDED —
+// picking those made every jump land one source line late (field-tested by Tommy).
+// Vertical distance weighs more (the target is a line of text); x still matters,
+// Overleaf-style: clicking the end of a wrapped line resolves to the source line that
+// continues there. `valid` filters out records from files we can't jump to (.aux/.toc,
+// classes), so their points don't steal the click from the real text next to them.
+function syncInverse(page, x, y, valid) {
   const pg = syncTex.pages.get(page);
   if (!pg) return null;
-  let best = null, bestArea = Infinity;
+  let best = null, bestD = Infinity;
+  for (const p of pg.points) {
+    if (valid && !valid(p.tag)) continue;
+    const d = (p.x - x) ** 2 + 9 * (p.y - y) ** 2;
+    if (d < bestD) { bestD = d; best = { tag: p.tag, line: p.line }; }
+  }
+  if (best) return best;
+  // Degenerate synctex with no usable points: smallest containing hbox as a fallback.
+  let bestArea = Infinity;
   for (const b of pg.boxes) {
+    if (valid && !valid(b.tag)) continue;
     const x0 = Math.min(b.x, b.x + b.w), x1 = Math.max(b.x, b.x + b.w);
     const y0 = b.y - b.h, y1 = b.y + b.d;
     if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
       const area = (x1 - x0) * (y1 - y0);
       if (area < bestArea) { bestArea = area; best = { tag: b.tag, line: b.line }; }
     }
-  }
-  if (best) return best;
-  let bestD = Infinity;
-  for (const p of pg.points) {
-    const d = (p.x - x) ** 2 + 4 * (p.y - y) ** 2;
-    if (d < bestD) { bestD = d; best = { tag: p.tag, line: p.line }; }
   }
   return best;
 }
@@ -997,13 +1023,12 @@ function onPdfDblClick(e) {
   if (!page || !pdfPage) return;
   const rect = e.target.getBoundingClientRect();
   const vp = pdfPage.getViewport({ scale: 1 });
+  const inProject = (tag) => { const f = syncTex.pathOf.get(tag); return !!f && hasPath(f); };
   const hit = syncInverse(page,
     (e.clientX - rect.left) / rect.width * vp.width,
-    (e.clientY - rect.top) / rect.height * vp.height);
+    (e.clientY - rect.top) / rect.height * vp.height, inProject);
   if (!hit) return;
-  const file = syncTex.pathOf.get(hit.tag);
-  if (!file || !hasPath(file)) return;                 // class/style files outside the project
-  gotoIssue(file, hit.line);
+  gotoIssue(syncTex.pathOf.get(hit.tag), hit.line);
 }
 
 // ---------- Splitters ----------
