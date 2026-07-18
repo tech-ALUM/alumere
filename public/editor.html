@@ -87,13 +87,18 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <div id="editorEmpty" class="editor-empty" hidden>Nothing open — pick a file from <b>Project</b> on the left.</div>
     </section>
 
-    <div class="splitter" data-target="editorPane"></div>
+    <div class="splitter" data-target="editorPane">
+      <!-- SyncTeX forward: sits on the editor/PDF divider, Overleaf-style. -->
+      <button id="syncForward" class="sync-jump hidden" type="button"
+              title="Show the cursor's line in the PDF (double-click the PDF to jump back to the source)">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg>
+      </button>
+    </div>
 
     <section class="pane preview" id="previewPane">
       <div class="pane-head">
         <span>Preview</span>
         <div class="pane-actions">
-          <button id="syncForward" class="mini hidden" title="Show the cursor's line in the PDF (double-click the PDF to jump back to the source)">⌖ Locate</button>
           <div id="pdfZoomBar" class="zoombar hidden">
             <button id="zoomOut" class="zoombtn" title="Zoom out">−</button>
             <button id="zoomReset" class="zoomlabel" title="Fit width"><span id="pdfZoomLabel">100%</span></button>

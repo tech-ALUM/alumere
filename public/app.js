@@ -667,7 +667,9 @@ function showTab(which) {
   $("tabPdf").classList.toggle("active", pdf);
   $("tabLog").classList.toggle("active", !pdf);
   $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfDoc);
-  $("syncForward").classList.toggle("hidden", !pdf || !pdfDoc || !syncTex);
+  // The divider arrow needs a PDF + its synctex map, but not the PDF tab in front:
+  // jumping from the Log view is fine (flashPdfSpot switches to the PDF itself).
+  $("syncForward").classList.toggle("hidden", !pdfDoc || !syncTex);
 }
 
 // ---------- PDF preview (PDF.js): crisp canvas render + smooth continuous zoom ----------
@@ -852,11 +854,15 @@ async function loadSyncTex(b64, root) {
 // The subset of the synctex format we need. Records live after "Content:", grouped in
 // {page … } blocks: hboxes "(tag,line:x,y:w,h,d" carry extents (containment for the
 // inverse search), records x/k/g/$/v carry bare positions. Coordinates are scaled
-// points from the TOP-LEFT of the page, y growing downward at the BASELINE — the same
-// orientation as our canvas layout, so they map straight through.
+// points, y growing downward at the BASELINE — same orientation as our canvas — but
+// but the page origin varies by engine: pdflatex/lualatex bake the (1in,1in) TeX
+// origin into the coordinates and write "X/Y Offset:0", xelatex writes origin-relative
+// coordinates and puts the 1in into the Offset headers. So: page = raw + header offset,
+// nothing hardcoded. (Field-tested both ways — a fixed +72 double-counts on xelatex,
+// no offset lands every jump one block off, e.g. abstract → author line.)
 function parseSyncTex(text, root) {
   const pathOf = new Map(), tagOf = new Map(), pages = new Map(), byLoc = new Map();
-  let unit = 1, page = 0, inContent = false;
+  let unit = 1, page = 0, inContent = false, offX = 0, offY = 0;
   const norm = (p) => {           // "/tmp/alumere-x/./sections/intro.tex" → "sections/intro.tex"
     let s = p.trim();
     if (root && s.startsWith(root)) s = s.slice(root.length);
@@ -874,6 +880,8 @@ function parseSyncTex(text, root) {
         const m = ln.match(/^Input:(\d+):(.*)$/);
         if (m) { const p = norm(m[2]); pathOf.set(+m[1], p); if (!tagOf.has(p)) tagOf.set(p, +m[1]); }
       } else if (ln.startsWith("Unit:")) unit = Number(ln.slice(5)) || 1;
+      else if (ln.startsWith("X Offset:")) offX = (Number(ln.slice(9)) || 0) / SP_PER_BP;
+      else if (ln.startsWith("Y Offset:")) offY = (Number(ln.slice(9)) || 0) / SP_PER_BP;
       else if (ln.startsWith("Content:")) inContent = true;
       continue;
     }
@@ -885,13 +893,13 @@ function parseSyncTex(text, root) {
     if (c === "(" || c === "h") {                       // hbox, open or void
       const m = ln.match(/^.(\d+),(\d+):(-?\d+),(-?\d+):(-?\d+),(-?\d+),(-?\d+)/);
       if (!m) continue;
-      const box = { tag: +m[1], line: +m[2], x: +m[3] * bp, y: +m[4] * bp, w: +m[5] * bp, h: +m[6] * bp, d: +m[7] * bp };
+      const box = { tag: +m[1], line: +m[2], x: +m[3] * bp + offX, y: +m[4] * bp + offY, w: +m[5] * bp, h: +m[6] * bp, d: +m[7] * bp };
       pageOf(page).boxes.push(box);
       addLoc(box.tag, box.line, { page, x: box.x, y: box.y, h: box.h, d: box.d });
     } else if (c === "x" || c === "k" || c === "g" || c === "$" || c === "v") {
       const m = ln.match(/^.(\d+),(\d+):(-?\d+),(-?\d+)/);
       if (!m) continue;
-      const pt = { tag: +m[1], line: +m[2], x: +m[3] * bp, y: +m[4] * bp };
+      const pt = { tag: +m[1], line: +m[2], x: +m[3] * bp + offX, y: +m[4] * bp + offY };
       pageOf(page).points.push(pt);
       addLoc(pt.tag, pt.line, { page, x: pt.x, y: pt.y, h: 0, d: 0 });
     }
@@ -1732,6 +1740,8 @@ async function init() {
   // keep Esc-closes-history and the Cmd/Ctrl+S compile shortcut.
   setupZoom();
   $("syncForward").addEventListener("click", syncForward);
+  // The arrow lives on the splitter: don't let pressing it start a pane drag.
+  $("syncForward").addEventListener("mousedown", (e) => e.stopPropagation());
   pagesEl.addEventListener("dblclick", onPdfDblClick);   // inverse search: PDF → source
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
