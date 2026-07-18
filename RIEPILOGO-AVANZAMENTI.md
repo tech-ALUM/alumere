@@ -7,6 +7,39 @@
 
 ---
 
+## 2026-07-18 (sexies) — SyncTeX: fix sfasamento di 1 pollice + freccia sul divisorio ✅
+
+Tommy ha provato il giro 3 sul campo e **l'ha bucato subito**: forward sull'abstract evidenziava la
+riga dell'autore, inverse simmetricamente sfasato (Eulero → "Così com e?", bullet → file/righe a caso
+apparente). Lo schema c'era eccome: **tutto sfasato di esattamente 1 pollice (72bp) verso l'alto**.
+
+**La causa** — le coordinate synctex **non sono coordinate di pagina**: sono relative all'**origine
+TeX**, che sta (1in,1in) dentro l'angolo alto-sinistro. E gli engine differiscono: pdflatex/lualatex
+*cuociono* il pollice nei valori e scrivono `X/Y Offset:0` nell'header; **xelatex** (il nostro default)
+scrive valori relativi all'origine e mette il pollice **negli header Offset** (verificato compilando
+con tutti e tre nel container). Il parser ignorava gli header → con xelatex mancava un pollice. Fix:
+**pagina = raw + offset dall'header**, niente hardcode (un +72 fisso raddoppierebbe su xelatex).
+
+**Perché i test del giro 3 non l'avevano preso**: erano **circolari** — confrontavano l'output del
+codice coi valori synctex grezzi, non con la posizione **visiva** del testo. (L'unica lettura davvero
+visiva diceva il giusto, e l'ho scartata "correggendo" i conti con l'ipotesi Letter-vs-A4 che faceva
+quadrare i numeri circolari.) Lezione da diario: **la verifica di un mapping va ancorata a un
+riferimento esterno** (qui: click reali su testo individuato a schermo), mai ai dati che il mapping
+stesso produce.
+
+**Più UX su richiesta di Tommy**: il bottone forward lascia l'header della preview e diventa una
+**freccia → sulla barra divisoria** editor/PDF, stile Overleaf (tonda, `mousedown` fermato così
+premerla non avvia il drag del divisorio; visibile anche dal tab Log — il salto porta da sé al PDF).
+
+**Verificato** (browser reale, click veri su punti scelti a schermo — non più sintetici, console pulita)
+- **I 3 esempi esatti di Tommy**: bullet "An editor with command autocomplete" → `intro.tex:8`;
+  riga di Eulero → `math.tex:3`; equazione → `math.tex:5`; più "ciaooo" → `main.tex:29` e titolo →
+  `main.tex:15`. (±1 riga = attribuzione a fine-paragrafo di synctex, come Overleaf.)
+- **Forward**: cursore su riga 17 → banda a [297,308]bp con la prima riga dell'abstract a baseline 305.
+- **Divisorio**: la freccia salta al PDF; il **drag funziona ancora** (provato avanti e indietro).
+
+---
+
 ## 2026-07-18 (quinquies) — Parità Overleaf, giro 3/5: SyncTeX ✅
 
 Terzo giro dell'arco "parità Overleaf": **SyncTeX** nei due sensi. **Forward** = bottone **⌖ Locate**
