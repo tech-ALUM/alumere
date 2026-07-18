@@ -92,13 +92,14 @@ function colorFor(seed) {
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
-const openPathEl = $("openPath"), presenceEl = $("presence");
+const tabbarListEl = $("tabbarList"), editorEmptyEl = $("editorEmpty"), presenceEl = $("presence");
 const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
 const pdfScroll = $("pdfScroll"), pdfSizer = $("pdfSizer"), pagesEl = $("pdfPages");
 const previewBody = document.querySelector(".preview-body");
 const engineSel = $("engine");
 
 let currentPath = null;            // path of the open file (null = nothing open)
+let openTabs = [];                 // client-only: paths open as tabs, left→right order
 let view = null;                   // the live CodeMirror EditorView
 let targetDir = "";                // folder new files/folders go into (from last click)
 const collapsed = new Set();       // folder paths the user has collapsed (local-only UI)
@@ -306,6 +307,8 @@ function renameNode(node) {
   if (isFolder) {
     const prefix = node.path + "/";
     const affected = fileEntries().filter(([p]) => p === node.path || p.startsWith(prefix));
+    // Keep open tabs pointing at the moved files (same order) so the prune in onFilesChanged spares them.
+    openTabs = openTabs.map((p) => (p === node.path || p.startsWith(prefix)) ? newPath + p.slice(node.path.length) : p);
     let reopen = null;
     if (currentPath && (currentPath === node.path || currentPath.startsWith(prefix))) {
       reopen = newPath + currentPath.slice(node.path.length);
@@ -318,6 +321,8 @@ function renameNode(node) {
     if (reopen) openFile(reopen); else renderTree();
   } else {
     if (hasPath(newPath)) { alert("Path already exists."); return; }
+    const ti = openTabs.indexOf(node.path);
+    if (ti >= 0) openTabs[ti] = newPath;      // keep the tab in place through the rename
     const reopen = currentPath === node.path;
     if (reopen) currentPath = newPath;
     const v = filesMap.get(node.path);
@@ -343,12 +348,18 @@ function deleteNode(node) {
 
 // Fires on every change to the file set — local or remote — so the tree stays live.
 function onFilesChanged() {
+  const had = openTabs.length;
+  openTabs = openTabs.filter(hasPath);          // drop tabs whose file vanished (local or remote)
   renderTree();
   if (currentPath && !hasPath(currentPath)) {   // the open file went away (e.g. a peer deleted it)
-    const first = fileEntries()[0];
-    if (first) openFile(first[0]);
-    else { currentPath = null; if (view) { view.destroy(); view = null; } openPathEl.textContent = ""; }
+    const next = openTabs[0] || (fileEntries()[0] && fileEntries()[0][0]) || null;
+    if (next) { openFile(next); return; }       // openFile re-renders tabs + persists
+    currentPath = null;
+    if (view) { view.destroy(); view = null; }
+    try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
   }
+  renderTabs();
+  if (openTabs.length !== had) saveTabs();
 }
 
 // ---------- Editor (CodeMirror bound to the active file's Y.Text) ----------
@@ -400,6 +411,67 @@ function baseExtensions() {
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...completionKeymap, ...searchKeymap, indentWithTab]),
   ];
 }
+// ---------- Multi-file tabs (client-only view state) ----------
+// Opening a file (tree click, goto-issue, restore) adds a tab; peers don't see my tabs.
+// The set + active file are persisted per project so a reload restores the workspace.
+const TABS_KEY = () => `alumere.tabs:${PROJECT_ID}`;
+function saveTabs() {
+  try { localStorage.setItem(TABS_KEY(), JSON.stringify({ open: openTabs, active: currentPath })); } catch {}
+}
+function loadSavedTabs() {
+  try {
+    const s = JSON.parse(localStorage.getItem(TABS_KEY()) || "null");
+    if (s && Array.isArray(s.open)) return { open: s.open, active: s.active || null };
+  } catch {}
+  return null;
+}
+// Reflect currentPath === null (no tabs) by swapping the editor host for the empty note.
+function updateEditorEmpty() {
+  const empty = !currentPath;
+  editorHost.hidden = empty;
+  if (editorEmptyEl) editorEmptyEl.hidden = !empty;
+}
+function renderTabs() {
+  tabbarListEl.innerHTML = "";
+  const bases = openTabs.map(baseOf);
+  for (const path of openTabs) {
+    const tab = document.createElement("div");
+    tab.className = "tab" + (path === currentPath ? " active" : "");
+    tab.setAttribute("role", "tab");
+    tab.title = path;
+    const name = document.createElement("span");
+    name.className = "tab-name";
+    // Disambiguate same-named files (e.g. two "intro.tex") by prefixing their folder.
+    const base = baseOf(path), par = parentOf(path);
+    name.textContent = (par && bases.filter((b) => b === base).length > 1) ? `${baseOf(par)}/${base}` : base;
+    const close = document.createElement("button");
+    close.type = "button"; close.className = "tab-close"; close.title = "Close"; close.textContent = "✕";
+    tab.append(name, close);
+    tab.addEventListener("click", (e) => { if (e.target !== close && path !== currentPath) openFile(path); });
+    tab.addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(path); } }); // middle-click closes
+    close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(path); });
+    tabbarListEl.appendChild(tab);
+  }
+  updateEditorEmpty();
+  const active = tabbarListEl.querySelector(".tab.active");
+  if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+function closeTab(path) {
+  const i = openTabs.indexOf(path);
+  if (i < 0) return;
+  openTabs.splice(i, 1);
+  if (currentPath === path) {
+    const next = openTabs[i] || openTabs[i - 1] || null;   // prefer the right neighbour, else the left
+    if (next) { openFile(next); return; }                  // openFile re-renders tabs + persists
+    currentPath = null;
+    if (view) { view.destroy(); view = null; }
+    try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
+    renderTree();
+  }
+  renderTabs();
+  saveTabs();
+}
+
 // (Re)build the editor bound to `path`. Recreating the view on each switch keeps the
 // Yjs binding clean: the old yCollab is disposed before the new file's text loads, so
 // a file's content can never leak into another file's Y.Text.
@@ -407,6 +479,8 @@ function openFile(path) {
   if (!hasPath(path)) return;
   const val = filesMap.get(path);
   currentPath = path;
+  if (!openTabs.includes(path)) openTabs.push(path);
+  updateEditorEmpty();               // un-hide the host before CM measures it
   if (view) { view.destroy(); view = null; }
   const { EditorView, keymap } = CM.view;
   const { EditorState } = CM.state;
@@ -429,9 +503,10 @@ function openFile(path) {
     });
   }
   view = new EditorView({ state, parent: editorHost });
-  openPathEl.textContent = path;
   try { provider.awareness.setLocalStateField("activeFile", path); } catch {}
   renderTree();
+  renderTabs();
+  saveTabs();
   view.focus();
 }
 
@@ -922,9 +997,19 @@ function onSynced() {
     booted = true;
     renderTree();
     const files = flattenForCompile();
-    const mainPath = detectMain(files);
-    if (hasPath(mainPath)) openFile(mainPath);
-    else if (files[0]) openFile(files[0].path);
+    const saved = loadSavedTabs();
+    let opened = false;
+    if (saved && saved.open.length) {
+      openTabs = saved.open.filter(hasPath);                 // restore only files that still exist
+      const active = (saved.active && hasPath(saved.active)) ? saved.active : (openTabs[0] || null);
+      if (active) { openFile(active); opened = true; }       // active is already in openTabs → order kept
+    }
+    if (!opened) {
+      const mainPath = detectMain(files);
+      if (hasPath(mainPath)) openFile(mainPath);
+      else if (files[0]) openFile(files[0].path);
+      else renderTabs();                                     // empty project → show the empty state
+    }
     compile();
   }
   onAwarenessChange();           // booted by now, so this actually paints the strip + markers

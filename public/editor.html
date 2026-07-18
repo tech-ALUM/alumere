@@ -73,9 +73,9 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     <div class="splitter" data-target="filesPane"></div>
 
     <section class="pane editor">
-      <div class="pane-head">
-        <span id="openPath">main.tex</span>
-        <span class="muted small" id="saveHint"
+      <div class="tabbar" id="tabbar">
+        <div class="tabbar-list" id="tabbarList" role="tablist"></div>
+        <span class="muted small tab-savehint" id="saveHint"
               title="Changes save themselves, in real time: there's nothing to press.">auto-save</span>
       </div>
       <div id="offlineBar" class="offline-bar">
@@ -84,6 +84,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
           Your changes aren't lost: they sync on their own as soon as you're back online.</span>
       </div>
       <div id="editor" class="editor-host"></div>
+      <div id="editorEmpty" class="editor-empty" hidden>Nothing open — pick a file from <b>Project</b> on the left.</div>
     </section>
 
     <div class="splitter" data-target="editorPane"></div>
