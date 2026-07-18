@@ -992,7 +992,7 @@ app.post("/api/projects/:id/history/:vid/label", requireUser, async (req, res) =
 // ---------- compile (compiles the files sent inline; stateless temp dir) ----------
 function runLatexmk(cwd, mainFile, engineFlag) {
   return new Promise((resolve) => {
-    const args = [engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-no-shell-escape", mainFile];
+    const args = [engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-synctex=1", "-no-shell-escape", mainFile];
     const child = spawn("latexmk", args, { cwd });
     let log = "";
     const onData = (d) => (log += d.toString());
@@ -1024,7 +1024,11 @@ app.post("/api/compile", requireUser, async (req, res) => {
     const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
     if (existsSync(pdfPath)) {
       const pdf = await readFile(pdfPath);
-      return res.json({ ok: true, log, pdf: pdf.toString("base64") });
+      // SyncTeX map (editor ⇄ PDF positions), parsed client-side. Its Input records
+      // point into the temp dir, so ship the dir too for path normalisation.
+      const syncPath = path.join(dir, mainRel.replace(/\.tex$/i, ".synctex.gz"));
+      const synctex = existsSync(syncPath) ? (await readFile(syncPath)).toString("base64") : null;
+      return res.json({ ok: true, log, pdf: pdf.toString("base64"), synctex, synctexRoot: dir });
     }
     return res.json({ ok: false, log: log || "No PDF was produced. Check the log for LaTeX errors.", code });
   } catch (err) {

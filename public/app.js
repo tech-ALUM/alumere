@@ -642,6 +642,7 @@ async function compile() {
       showTab("pdf");                                  // reveal the pane before we measure it
       try { await loadPdf(data.pdf); }                 // base64 → PDF.js canvases
       catch (err) { console.warn("PDF render failed:", err); }
+      await loadSyncTex(data.synctex, data.synctexRoot);   // editor ⇄ PDF map for this build
       showTab("pdf");                                  // pdfDoc is set now → the zoom bar shows
       setStatus("ok", "Compiled ✓");
     } else {
@@ -666,6 +667,7 @@ function showTab(which) {
   $("tabPdf").classList.toggle("active", pdf);
   $("tabLog").classList.toggle("active", !pdf);
   $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfDoc);
+  $("syncForward").classList.toggle("hidden", !pdf || !pdfDoc || !syncTex);
 }
 
 // ---------- PDF preview (PDF.js): crisp canvas render + smooth continuous zoom ----------
@@ -705,7 +707,12 @@ async function loadPdf(base64) {
 function computeFitScale() {
   if (!pdfPageList.length) return;
   const vp = pdfPageList[0].getViewport({ scale: 1 });
-  const avail = Math.max(120, previewBody.clientWidth - 32);   // minus .pdf-pages padding
+  const w = previewBody.clientWidth;
+  // 0 = the pane isn't laid out (e.g. the tab is hidden while a compile lands): keep the
+  // previous fit rather than clamping to a tiny page; the ResizeObserver in setupZoom
+  // re-fits as soon as the pane has a real width again.
+  if (!w) return;
+  const avail = Math.max(120, w - 32);           // minus .pdf-pages padding
   fitScale = avail / vp.width;
 }
 
@@ -818,6 +825,177 @@ function setupZoom() {
       rt = setTimeout(() => { computeFitScale(); renderPdf(); }, 150);
     }).observe(previewBody);
   }
+}
+
+// ---------- SyncTeX (editor ⇄ PDF) ----------
+// The compile ships back main.synctex.gz; we gunzip it right in the browser
+// (DecompressionStream — no library) and index the records both ways: (file,line) →
+// PDF spots for the forward search, per-page boxes/points → (file,line) for the
+// inverse double-click. Client-only and stateless: each compile replaces the data.
+let syncTex = null;
+const SP_PER_BP = 65781.76;   // scaled points per PDF point (65536 sp/pt × 72.27/72 pt/bp)
+
+async function gunzipToText(b64) {
+  const bin = atob(b64), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const stream = new Blob([arr]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+
+async function loadSyncTex(b64, root) {
+  syncTex = null;
+  if (!b64 || typeof DecompressionStream === "undefined") return;
+  try { syncTex = parseSyncTex(await gunzipToText(b64), root || ""); }
+  catch (err) { console.warn("SyncTeX unavailable:", err); }
+}
+
+// The subset of the synctex format we need. Records live after "Content:", grouped in
+// {page … } blocks: hboxes "(tag,line:x,y:w,h,d" carry extents (containment for the
+// inverse search), records x/k/g/$/v carry bare positions. Coordinates are scaled
+// points from the TOP-LEFT of the page, y growing downward at the BASELINE — the same
+// orientation as our canvas layout, so they map straight through.
+function parseSyncTex(text, root) {
+  const pathOf = new Map(), tagOf = new Map(), pages = new Map(), byLoc = new Map();
+  let unit = 1, page = 0, inContent = false;
+  const norm = (p) => {           // "/tmp/alumere-x/./sections/intro.tex" → "sections/intro.tex"
+    let s = p.trim();
+    if (root && s.startsWith(root)) s = s.slice(root.length);
+    return s.replace(/^\/+/, "").replace(/^(\.\/)+/, "");
+  };
+  const pageOf = (n) => { let pg = pages.get(n); if (!pg) { pg = { boxes: [], points: [] }; pages.set(n, pg); } return pg; };
+  const addLoc = (tag, line, rec) => {
+    const key = tag + ":" + line;
+    let a = byLoc.get(key); if (!a) { a = []; byLoc.set(key, a); }
+    a.push(rec);
+  };
+  for (const ln of text.split("\n")) {
+    if (!inContent) {
+      if (ln.startsWith("Input:")) {
+        const m = ln.match(/^Input:(\d+):(.*)$/);
+        if (m) { const p = norm(m[2]); pathOf.set(+m[1], p); if (!tagOf.has(p)) tagOf.set(p, +m[1]); }
+      } else if (ln.startsWith("Unit:")) unit = Number(ln.slice(5)) || 1;
+      else if (ln.startsWith("Content:")) inContent = true;
+      continue;
+    }
+    const c = ln[0];
+    if (c === "{") { page = parseInt(ln.slice(1), 10) || 0; continue; }
+    if (c === "}") { page = 0; continue; }
+    if (!page) continue;
+    const bp = unit / SP_PER_BP;
+    if (c === "(" || c === "h") {                       // hbox, open or void
+      const m = ln.match(/^.(\d+),(\d+):(-?\d+),(-?\d+):(-?\d+),(-?\d+),(-?\d+)/);
+      if (!m) continue;
+      const box = { tag: +m[1], line: +m[2], x: +m[3] * bp, y: +m[4] * bp, w: +m[5] * bp, h: +m[6] * bp, d: +m[7] * bp };
+      pageOf(page).boxes.push(box);
+      addLoc(box.tag, box.line, { page, x: box.x, y: box.y, h: box.h, d: box.d });
+    } else if (c === "x" || c === "k" || c === "g" || c === "$" || c === "v") {
+      const m = ln.match(/^.(\d+),(\d+):(-?\d+),(-?\d+)/);
+      if (!m) continue;
+      const pt = { tag: +m[1], line: +m[2], x: +m[3] * bp, y: +m[4] * bp };
+      pageOf(page).points.push(pt);
+      addLoc(pt.tag, pt.line, { page, x: pt.x, y: pt.y, h: 0, d: 0 });
+    }
+  }
+  const linesByTag = new Map();   // per file: the source lines that produced output, sorted
+  for (const key of byLoc.keys()) {
+    const [tag, line] = key.split(":").map(Number);
+    if (!linesByTag.has(tag)) linesByTag.set(tag, []);
+    linesByTag.get(tag).push(line);
+  }
+  for (const a of linesByTag.values()) a.sort((x, y) => x - y);
+  return { pathOf, tagOf, pages, byLoc, linesByTag };
+}
+
+// Forward search: cursor line → the first spot in the PDF that line produced. A line
+// that left no record (comment, blank, preamble) falls to the nearest following one —
+// "show me where I am" should never just do nothing mid-document.
+function syncForward() {
+  if (!syncTex || !view || !currentPath) return;
+  const tag = syncTex.tagOf.get(currentPath);
+  if (tag == null) return;                             // file wasn't part of the last compile
+  const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+  const lines = syncTex.linesByTag.get(tag) || [];
+  let target = null;
+  for (const l of lines) if (l >= line) { target = l; break; }
+  if (target == null) target = lines[lines.length - 1];
+  if (target == null) return;
+  // Among the line's records prefer real text boxes (h > 0) over bare glue/kern points:
+  // stray spacing attributed to the same line can sit well above the text itself.
+  let best = null;
+  for (const r of syncTex.byLoc.get(tag + ":" + target)) {
+    if (best) {
+      const rBox = r.h > 0, bestBox = best.h > 0;
+      if (bestBox && !rBox) continue;              // never trade a box for a point
+      if (bestBox === rBox && (r.page > best.page || (r.page === best.page && r.y >= best.y))) continue;
+    }
+    best = r;
+  }
+  flashPdfSpot(best);
+}
+
+// Highlight a horizontal band at the spot and scroll it into view. The band lives
+// INSIDE .pdf-pages (position:absolute), so the pinch transform scales it along with
+// the pages, and a zoom re-render (replaceChildren) simply clears it.
+function flashPdfSpot(r) {
+  const canvas = pagesEl.querySelectorAll("canvas")[r.page - 1];
+  const pdfPage = pdfPageList[r.page - 1];
+  if (!canvas || !pdfPage) return;
+  showTab("pdf");                                      // measuring needs the pane visible
+  const vp = pdfPage.getViewport({ scale: 1 });
+  const k = canvas.offsetHeight / vp.height;           // PDF pt → layout px at the current zoom
+  const above = r.h || 8, below = r.d || 3;            // point records get a default band
+  const flash = document.createElement("div");
+  flash.className = "sync-flash";
+  flash.style.left = canvas.offsetLeft + "px";
+  flash.style.width = canvas.offsetWidth + "px";
+  flash.style.top = canvas.offsetTop + (r.y - above) * k + "px";
+  flash.style.height = Math.max(6, (above + below) * k) + "px";
+  for (const el of pagesEl.querySelectorAll(".sync-flash")) el.remove();
+  pagesEl.appendChild(flash);
+  const fr = flash.getBoundingClientRect(), sr = pdfScroll.getBoundingClientRect();
+  pdfScroll.scrollTop += fr.top + fr.height / 2 - (sr.top + sr.height * 0.35);
+  setTimeout(() => flash.remove(), 1900);
+}
+
+// Inverse search: the smallest hbox containing the click wins (nested boxes → the
+// innermost is the most specific line). A click that hits no box (margins, gaps)
+// falls back to the nearest record, weighing vertical distance more — the target is
+// a line of text, so "same height" matters more than "same column".
+function syncInverse(page, x, y) {
+  const pg = syncTex.pages.get(page);
+  if (!pg) return null;
+  let best = null, bestArea = Infinity;
+  for (const b of pg.boxes) {
+    const x0 = Math.min(b.x, b.x + b.w), x1 = Math.max(b.x, b.x + b.w);
+    const y0 = b.y - b.h, y1 = b.y + b.d;
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
+      const area = (x1 - x0) * (y1 - y0);
+      if (area < bestArea) { bestArea = area; best = { tag: b.tag, line: b.line }; }
+    }
+  }
+  if (best) return best;
+  let bestD = Infinity;
+  for (const p of pg.points) {
+    const d = (p.x - x) ** 2 + 4 * (p.y - y) ** 2;
+    if (d < bestD) { bestD = d; best = { tag: p.tag, line: p.line }; }
+  }
+  return best;
+}
+
+function onPdfDblClick(e) {
+  if (!syncTex || e.target.tagName !== "CANVAS") return;
+  const page = [...pagesEl.querySelectorAll("canvas")].indexOf(e.target) + 1;
+  const pdfPage = pdfPageList[page - 1];
+  if (!page || !pdfPage) return;
+  const rect = e.target.getBoundingClientRect();
+  const vp = pdfPage.getViewport({ scale: 1 });
+  const hit = syncInverse(page,
+    (e.clientX - rect.left) / rect.width * vp.width,
+    (e.clientY - rect.top) / rect.height * vp.height);
+  if (!hit) return;
+  const file = syncTex.pathOf.get(hit.tag);
+  if (!file || !hasPath(file)) return;                 // class/style files outside the project
+  gotoIssue(file, hit.line);
 }
 
 // ---------- Splitters ----------
@@ -1553,6 +1731,8 @@ async function init() {
   // The ⚙ menu (toggle / outside-click / Esc-to-close) is wired by theme.js. Here we only
   // keep Esc-closes-history and the Cmd/Ctrl+S compile shortcut.
   setupZoom();
+  $("syncForward").addEventListener("click", syncForward);
+  pagesEl.addEventListener("dblclick", onPdfDblClick);   // inverse search: PDF → source
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }

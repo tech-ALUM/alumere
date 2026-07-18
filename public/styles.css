@@ -311,8 +311,18 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 .pdf-scroll { position: absolute; inset: 0; overflow: auto; background: #525659; }
 .pdf-scroll.hidden { display: none !important; }
 .pdf-sizer { margin: 0 auto; }                 /* centre the page when it's narrower than the pane */
-.pdf-pages { transform-origin: 0 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+.pdf-pages { position: relative; transform-origin: 0 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
 .pdf-pages canvas { display: block; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.45); }
+
+/* SyncTeX forward search: a band over the PDF line, flashed then faded. position:absolute
+   keeps it out of the flex flow of the pages column. */
+.sync-flash {
+  position: absolute; pointer-events: none; z-index: 2; border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: sync-flash-fade 1.9s ease-out forwards;
+}
+@keyframes sync-flash-fade { 0%, 45% { opacity: 1; } 100% { opacity: 0; } }
 
 /* Zoom controls, shown only over the PDF tab. */
 .zoombar { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
