@@ -7,6 +7,77 @@
 
 ---
 
+## 2026-07-18 (novies) — Parità Overleaf, giro 5/5: Review panel + Chat ✅ (in attesa del check di Tommy)
+
+Quinto e ultimo giro dell'arco "parità Overleaf", sul disegno chiesto da Tommy (screenshot Overleaf):
+**rail di icone** a sinistra con 3 pulsanti — **Files / Review / Chat** — che **scambiano** il contenuto
+della colonna sinistra (un pannello per volta, alla Overleaf nuovo). Files = l'albero di sempre;
+**Review** = tutti i thread di commento del progetto (aperti, risolti, **orfani**) con salto-al-testo,
+reply, resolve/reopen, delete; **Chat** = chat di gruppo del progetto. **Niente rebuild del bundle**
+(solo DOM + tipi Yjs già nel bundle): file statici + 2 blocchi in `server.js`.
+
+**Cosa c'è ora**
+- **Rail** (`editor.html` + CSS): prima colonna del grid (46px), icone SVG a tratto, stato attivo
+  in accento; **badge** rossi sul rail — su Review il conteggio dei thread aperti, su Chat i
+  **non letti** (messaggi altrui arrivati a pannello chiuso; si azzera aprendo). I pannelli nascosti
+  **escono dal grid** (`.pane[hidden]{display:none}` — il trappolone `[hidden]` vs author-CSS,
+  **quarta** apparizione, stavolta previsto in anticipo).
+- **Review panel** (`app.js`): card per thread in ordine di documento (file, poi posizione) con path,
+  citazione cliccabile (**salto cross-file**: apre il file, cursore sul range, popover del thread —
+  riusa `resolveAnchor`), messaggi con avatar/menzioni, reply con @autocomplete (stesso `mentionArea`;
+  l'email di menzione parte col **path del thread**, non del file aperto), ✓ Resolve / ↺ Reopen
+  (che ributta l'evidenzia se il testo esiste ancora), 🗑 con confirm. Tab **Open / Resolved**;
+  i thread il cui testo non c'è più portano la targhetta **"text deleted"** (o "file deleted") —
+  sono i "orfani" promessi dal giro 4. Il pannello legge lo stato **dalla `filesMap` condivisa**,
+  quindi funziona anche per file non aperti nell'editor.
+- **Chat**: `Y.Array("chat")` di oggetti piani `{id, by, at, text}` nello stesso doc → sync live
+  gratis; messaggi consecutivi della stessa persona entro 3′ **si impilano** sotto un solo header;
+  Enter invia (Shift+Enter va a capo), textarea che si auto-allarga, scroll incollato al fondo solo
+  se ci sei già (chi legge la storia non viene strattonato). Empty state alla Overleaf.
+- **Server**: `chat.json` accanto a `comments.json` (fuori da `files/`: non è un sorgente), stesso
+  identico pattern — seed in `onLoadDocument` se l'array è vuoto, riscrittura in `onStoreDocument`
+  **solo se cambiata** → un salvataggio di sola chat è "no change" per i file, **`updatedAt` fermo**
+  (verificato: messaggi delle 16:12/16:16, `updatedAt` rimasto alle 16:06).
+
+**Bug latente del giro 4 trovato e sistemato strada facendo**: `openThreads` ri-mostrava il popover
+**dopo** che `renderThreadPopover` l'aveva chiuso (caso "tutti i thread morti nel frattempo") →
+**pillola bianca vuota** sull'editor. Emergeva col salto dalla card: il popover si apre in un
+`requestAnimationFrame`, e i frame possono arrivare **tardi** (tab in background) — se nel frattempo
+il thread è stato risolto/cancellato, boom. Fix doppio: guardia in `openThreads` (se il render l'ha
+chiuso, non ri-mostrare) + ricontrollo del thread dentro il rAF di `gotoThread`.
+
+**Contorno**: ripulite le ultime stringhe italiane sfuggite al giro i18n — "(tu)" → "(you)" negli
+avatar, "Sconosciuto" → "Unknown", "Torna ai progetti" → "Back to projects".
+
+**Verificato** (dev :3000, browser reale, due utenti veri, chiaro + scuro, console pulita, `test/smoke.sh` 16/16)
+- **Rail**: i 3 pulsanti scambiano il pannello; layout a 6 colonne col rail; splitter intatti.
+- **Review**: commento creato su "godeeee" → card nel tab Open + badge "1" + evidenzia ambra;
+  **salto cross-file** (da intro.tex la quote riporta su main.tex col cursore esatto sul range);
+  reply dal pannello (thread a 2 messaggi); **Resolve dal pannello** → evidenzia sparita, badge a 0,
+  card migrata in Resolved con riga "✓ Resolved by …"; **Reopen** → evidenzia e badge tornano;
+  **orfano**: cancellato "godeeee" dal sorgente → card flaggata "text deleted", thread vivo;
+  testo ripristinato e thread di test eliminato (confirm). I 2 thread risolti del giro 4 al loro posto.
+- **Chat a due utenti** (DemoAccount + Paolo Rossi via magic-link, due tab): messaggio → compare
+  nell'altro tab; risposta di Paolo → **badge non-letti "1"** sul rail del tab con la chat chiusa,
+  si azzera aprendola; avatar/nomi/ore giusti. `chat.json` su disco coi 2 messaggi; log store sempre
+  "**no change**".
+- **Tema scuro**: review card e chat leggibili su `--panel/--ink/--line` (screenshot).
+- ⚠️ Residuo voluto: i **2 messaggi di prova restano in chat** — un tab esterno (TP) tiene il doc
+  vivo in memoria e ri-semina a ogni riavvio, quindi svuotarla ora è inutile; sono contenuto
+  dimostrativo, si tolgono cancellando `chat.json` a progetto chiuso da tutti.
+- Inciampo di verifica da ricordare: le coordinate manuali del tool browser sono in **spazio
+  screenshot** (×1.6 rispetto ai CSS px del viewport) — tre click "fantasma" prima di capirlo;
+  i click sui `ref_N` invece riportano CSS px. (E un rAF **non scatta** finché il tab non renderizza
+  un frame: è così che si è palesato il bug del popover.)
+
+**Processo**: regola nuova rispettata — implementato e verificato, **niente commit**: aspetto il
+check di Tommy. ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+**L'arco "parità Overleaf" (5 giri) è completo.** Prossimo: quello che Tommy decide — in lista
+restano sicurezza giro 2 (allowlist/ACL), template (Step G), tag in massa, cestino.
+
+---
+
 ## 2026-07-18 (octies) — Parità Overleaf, giro 4/5: Commenti stile Word ✅
 
 Quarto giro dell'arco "parità Overleaf": **commenti ancorati al testo** con **@menzioni** ed
