@@ -7,6 +7,62 @@
 
 ---
 
+## 2026-07-18 (quater) — Parità Overleaf, giro 2/5: tab multi-file ✅
+
+Secondo giro dell'arco "parità Overleaf" (dopo la rinomina). **Tab multi-file in alto**, stile VS Code /
+Overleaf nuovo: apri più file → ognuno diventa un tab, click per switchare, × per chiudere. **Solo client**:
+nessun endpoint, **nessun rebuild del bundle** (file statici, basta reload). I tab sono **vista personale**
+(i peer non vedono i miei tab; l'awareness `activeFile` resta = file a fuoco).
+
+**Cosa c'è ora** (`editor.html` + `app.js` + `styles.css`)
+- **Barra tab** al posto della vecchia intestazione dell'editor (che mostrava un solo `#openPath`). Ogni
+  tab: nome-file + × (la × compare su hover / sul tab attivo). Il tab **attivo** prende lo sfondo
+  dell'editor (`--panel`) + barra accento in cima → si "salda" alla superficie sotto; gli inattivi sono
+  `--panel-2` smorzati. La lista scrolla in orizzontale se i tab sono tanti; l'`auto-save` resta a destra.
+- **Apertura**: qualsiasi via che apre un file (click sull'albero, salto-da-errore, ripristino history)
+  aggiunge il tab se manca — `openFile` è il punto unico. **Click su un tab** = switch (ri-bind pulito
+  della view CM, come già faceva il cambio-file). **Middle-click** su un tab lo chiude (come VS Code).
+- **Chiusura**: la × toglie il tab; se era l'attivo passa al **vicino di destra** (poi sinistra); se non
+  resta nulla → **empty-state** ("Nothing open — pick a file from Project…", editor nascosto).
+- **Persistenza per progetto** (`localStorage["alumere.tabs:<id>"]` = `{open:[…], active}`): al reload la
+  **workspace si ricostruisce** (tab + file attivo), scartando i path non più esistenti; se non c'è nulla
+  di salvato si apre `main` come prima.
+- **Coerenza con le operazioni sui file**: rinomina di file/cartella **sposta il tab in-place** (rimappa i
+  path prima della mutazione, così la potatura in `onFilesChanged` lo risparmia); delete — o rimozione da un
+  peer — **pota** i tab spariti; se sparisce l'attivo si passa a un tab superstite.
+- **Disambiguazione**: due file con lo **stesso nome** (es. `sections/intro.tex` e `intro.tex`) mostrano la
+  cartella davanti al nome finché dura la collisione; tooltip = path completo sempre.
+
+**Scelte (e perché)**
+- **Vista solo-client, non condivisa**: i tab sono "cosa sto guardando io", non stato del progetto (come
+  Overleaf). Zero superficie server, zero rischio sul CRDT.
+- **View ricreata al cambio tab** (invariato): un solo `Y.Text` bindato per volta → il contenuto di un file
+  non può colare in un altro. I tab sono solo un elenco di path + quello attivo.
+- **Empty-state con override `[hidden]`**: `.editor-empty{display:flex}` batterebbe la UA-rule
+  `[hidden]{display:none}` → serve `.editor-empty[hidden]{display:none}` esplicito (stesso inciampo del
+  `.projname-btn` del giro rinomina).
+
+**Bonus (bug pre-esistente sistemato strada facendo):** il commit del tema scuro (`df54861`) aveva
+**cancellato il selettore `.mini, .tabbtn {`**, lasciando orfane le regole base → i bottoni **＋file/
+＋folder** e i tab **PDF/Log** erano senza padding/bordo/sfondo da qualche giro. Ripristinato (è proprio
+l'area della barra tab).
+
+**Verificato** (dev container :3000, browser reale, chiaro + scuro, console pulita per tutta la sessione)
+- Apertura progressiva → **4 tab** (main/intro/math/references); **switch** cambia editor e evidenzia;
+  **chiusura dell'attivo** → passa al vicino destro; **chiudi tutti** → empty-state (editor nascosto,
+  messaggio giusto), e **riapertura dall'albero** ricrea il tab.
+- **Persistenza**: reload → i tab tornano col file attivo giusto; un tab chiuso prima del reload **non**
+  riappare.
+- **Rinomina** di un file aperto → il tab segue il nuovo nome **in posizione**, resta attivo, contenuto
+  preservato; **delete pota** il tab. **Disambiguazione** on/off creando ed eliminando un secondo
+  `intro.tex`. Progetto "Sample paper" **riportato intatto** a fine test.
+
+**Prossimo:** **giro 3 — SyncTeX** (forward editor→PDF + inverse doppio-click PDF→sorgente; D3 = parse
+client-side, gunzip in browser via `DecompressionStream`, `-synctex=1` al compile). ⚠️ **Non è live**: file
+statici → nessun rebuild del bundle, ma serve il **pull+rebuild sul VPS** (Albi).
+
+---
+
 ## 2026-07-18 (ter) — Parità Overleaf, giro 1/5: rinomina progetto ✅
 
 Nuovo arco di lavoro: **portare 5 cose di Overleaf** dentro Alumère (Tommy ha girato screenshot).
