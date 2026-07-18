@@ -7,6 +7,61 @@
 
 ---
 
+## 2026-07-18 (quinquies) — Parità Overleaf, giro 3/5: SyncTeX ✅
+
+Terzo giro dell'arco "parità Overleaf": **SyncTeX** nei due sensi. **Forward** = bottone **⌖ Locate**
+nell'header della preview: la riga del cursore → banda evidenziata sul punto corrispondente del PDF
+(sfuma in ~2s) + scroll lì. **Inverse** = **doppio-click sul PDF** → si apre il file giusto col cursore
+sulla riga (riusa `gotoIssue`, quindi anche cross-file: doppio-click su un bullet dell'intro apre
+`sections/intro.tex`). Come da **D3**: parse **interamente client-side**, gunzip in browser via
+`DecompressionStream` — **zero dipendenze nuove, nessun rebuild del bundle**.
+
+**Cosa c'è ora**
+- **Server** (2 ritocchi a `server.js`): `-synctex=1` fra i flag di latexmk; `/api/compile` ritorna
+  anche `main.synctex.gz` in base64 + `synctexRoot` (la temp-dir) per normalizzare i path degli
+  `Input:` (`/tmp/alumere-x/./sections/intro.tex` → `sections/intro.tex`).
+- **Client** (`app.js`): parser del sottoinsieme synctex che serve — record dentro i blocchi `{pagina}`,
+  hbox `(tag,riga:x,y:w,h,d` con estensioni, record puntuali `x/k/g/$/v` — indicizzato nei due sensi:
+  `(file,riga) → spot` per il forward, `pagina → box/punti` per l'inverse. Coordinate in sp dall'alto
+  della pagina (stessa orientazione del canvas): conversione diretta in punti PDF (`/65781.76`).
+- **Forward**: riga senza record (commento, riga vuota) → si aggancia alla prima riga successiva che ne
+  ha; fra i record della riga **preferisce le hbox vere** (glue/kern "vaganti" sulla stessa riga possono
+  stare ben sopra il testo). La banda vive **dentro `.pdf-pages`** (position:absolute): il pinch la
+  scala con le pagine e un re-render la pulisce da solo.
+- **Inverse**: vince la **hbox più piccola** che contiene il click (le nidificate → la più specifica);
+  click nei margini → record più vicino, pesando di più la distanza verticale. File fuori progetto
+  (classi/pacchetti TeX) scartati con `hasPath`.
+- Il bottone Locate compare solo con PDF **e** synctex in mano (stesso pattern della zoom bar in
+  `showTab`); compile fallito → restano PDF e synctex **vecchi e coerenti fra loro**.
+
+**Scelte (e perché)**
+- **Parse client-side (D3 confermata)**: il server resta stateless (una riga di lettura file in più);
+  niente endpoint di query synctex, niente stato per progetto.
+- **Precisione = quella di synctex**: l'attribuzione è per **paragrafo** (i record portano la riga di
+  fine paragrafo), quindi l'inverse può atterrare 1-2 righe sotto quella "vera" — come Overleaf.
+- **Bonus (bug di robustezza sistemato)**: `computeFitScale` con pannello non impaginato
+  (`clientWidth=0`, es. compile atterrato in un tab nascosto) **clampava il fit al minimo** → PDF
+  minuscolo (120px). Ora larghezza 0 = mantieni il fit precedente; ci pensa la ResizeObserver quando
+  il pannello torna ad avere una larghezza vera.
+
+**Verificato** (dev container :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh` 16/16)
+- **Forward al bp**: cursore su una riga dell'abstract → banda misurata a [225,236]bp = esattamente la
+  baseline (233) della riga renderizzata; cross-file da `sections/math.tex` → banda sulla sezione
+  "Some Mathematics". ⚠️ Inciampo di verifica utile: la pagina è **US Letter (612×792)**, non A4 —
+  mezz'ora di "bug" che erano solo conversioni sbagliate nel test.
+- **Inverse su 4 bersagli noti** (dispatch di dblclick a coordinate bp calcolate): riga "ciaooo" →
+  `main.tex`, abstract → `main.tex:19`, TOC → `main.tex:21` esatto, bullet → `sections/intro.tex:7`
+  esatto.
+- **Multi-pagina** (progetto usa-e-getta via API, 2 pagine, poi eliminato): forward su riga di pagina 2
+  → scroll a pagina 2 con banda in cima; inverse dal canvas di pagina 2 → riga giusta.
+- Progetto "Sample paper" **intatto** (nessun edit di contenuto).
+
+**Prossimo:** **giro 4 — Commenti** stile Word (selezione→commento ancorato, @menzione, email; D1
+ancoraggio offset+snippet, D2 `users.json` al login). ⚠️ È il giro che richiede il **rebuild del bundle
+CM6** (decorazioni) → committare il bundle a mano. ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-18 (quater) — Parità Overleaf, giro 2/5: tab multi-file ✅
 
 Secondo giro dell'arco "parità Overleaf" (dopo la rinomina). **Tab multi-file in alto**, stile VS Code /
