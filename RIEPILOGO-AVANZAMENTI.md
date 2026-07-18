@@ -7,6 +7,29 @@
 
 ---
 
+## 2026-07-18 (bis) — Interfaccia tutta in inglese + rifiniture home ✅
+
+Su richiesta di Tommy, **tutta l'interfaccia in inglese** (il testo/contenuto dei documenti può
+restare all'occorrenza in italiano; l'UI no). Tradotte le stringhe visibili di **home**
+(`index.html`, `archive.js`), **editor** (`editor.html`, `app.js`), **login** (`auth.js`) e i
+messaggi **user-facing del server** (email magic-link, pagine "Confirm sign-in"/"Invalid link",
+errori, template del nuovo progetto, log dev). `lang="it"` → `lang="en"` su entrambe le pagine.
+I **commenti di codice** (interni, non interfaccia) sono lasciati come sono.
+
+Più due rifiniture home:
+- **Header colonne non in maiuscolo**: tolto `text-transform: uppercase` da `.proj-list-head` e
+  `.side-tags-head` → "Title / Owner / Last modified / Actions" e "Tags" in sentence-case.
+- **"New tag" in cima** alla sezione Tags (dopo l'intestazione, prima della lista), stile Overleaf.
+
+**Verificato**: home ed editor ricaricati in inglese, console pulita; server riparte pulito (log ora
+in inglese); sweep finale con grep → nessuna stringa italiana residua nell'UI.
+
+*Nota:* le intestazioni dei pannelli dell'editor (PROJECT / PREVIEW / MAIN.TEX / AUTO-SAVE) restano
+**maiuscole** per scelta di stile (CSS `.pane-head`) — non erano nella richiesta (era la tabella della
+home); si girano in un attimo se le vuoi coerenti. ⚠️ Dev: serve il pull+rebuild sul VPS per il live.
+
+---
+
 ## 2026-07-18 — Home stile Overleaf: lista + sidebar, azioni, archivio, tag + fix "ultima modifica" ✅
 
 Grosso giro sulla **home**, con Overleaf come riferimento (disposizione e interazioni, non i
