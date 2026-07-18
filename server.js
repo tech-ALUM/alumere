@@ -52,7 +52,7 @@ const SMTP_PORT = Number(process.env.SMTP_PORT) || 465;
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
-if (!ALLOWED_EMAIL_DOMAIN) console.warn("[alumere][auth] ALLOWED_EMAIL_DOMAIN non impostato: qualsiasi dominio è ammesso (solo per dev).");
+if (!ALLOWED_EMAIL_DOMAIN) console.warn("[alumere][auth] ALLOWED_EMAIL_DOMAIN not set: any domain is allowed (dev only).");
 
 // Persistent secret used to sign session cookies. Prefer SESSION_SECRET in prod;
 // otherwise keep one on disk inside PROJECTS_DIR (the persisted volume) so sessions
@@ -137,7 +137,7 @@ function persistPending() {
     mkdirSync(PROJECTS_DIR, { recursive: true });
     writeFileSync(PENDING_FILE, JSON.stringify(Object.fromEntries(pendingLogins)), "utf8");
   } catch (e) {
-    console.warn(`[alumere][auth] token pending non persistiti (${e.message}); restano in memoria`);
+    console.warn(`[alumere][auth] pending tokens not persisted (${e.message}); kept in memory`);
   }
 }
 function prunePending() {
@@ -175,7 +175,7 @@ async function mailTransport() {
       auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
     });
   } catch (e) {
-    console.warn(`[alumere][auth] nodemailer non disponibile (${e.message}); uso il fallback console`);
+    console.warn(`[alumere][auth] nodemailer unavailable (${e.message}); using console fallback`);
     _transport = null;
   }
   return _transport;
@@ -189,31 +189,31 @@ async function sendLoginLink(email, link) {
   const minutes = Math.round(LOGIN_TOKEN_TTL_MS / 60000);
   const t = await mailTransport();
   if (!t) {                                                // dev: no SMTP → print the link to the log
-    console.log(`[alumere][auth] (SMTP off) login link per ${email}:\n  ${link}`);
+    console.log(`[alumere][auth] (SMTP off) login link for ${email}:\n  ${link}`);
     return;
   }
   const safe = escapeHtml(link);
   await t.sendMail({
     from: SMTP_FROM, to: email,
-    subject: "Accesso ad Alumère",
+    subject: "Sign in to Alumère",
     // Both parts on purpose. The link is ~90 chars, and plain-text mail gets wrapped around 76:
     // some clients then linkify only up to the wrap, so the token arrives TRUNCATED and the user
     // gets "link non valido". In the HTML part the URL lives in the href attribute, where no
     // amount of visual wrapping can break it; the angle brackets do the same job for the text
     // fallback (RFC 3986's delimiter convention), plus a copy-pasteable copy for the stubborn ones.
     text:
-      `Apri questo link per accedere ad Alumère (scade tra ${minutes} minuti).\n` +
-      `Aprilo dal dispositivo su cui vuoi entrare:\n\n<${link}>\n\n` +
-      `Se non hai richiesto tu l'accesso, ignora pure questa mail.`,
+      `Open this link to sign in to Alumère (expires in ${minutes} minutes).\n` +
+      `Open it on the device you want to sign in from:\n\n<${link}>\n\n` +
+      `If you didn't request this, you can ignore this email.`,
     html:
       `<div style="font-family:${AUTH_FONT};font-size:15px;line-height:1.5;color:#243240">` +
-      `<p>Apri questo link per accedere ad Alumère (scade tra ${minutes} minuti).<br>` +
-      `Aprilo dal dispositivo su cui vuoi entrare.</p>` +
+      `<p>Open this link to sign in to Alumère (expires in ${minutes} minutes).<br>` +
+      `Open it on the device you want to sign in from.</p>` +
       `<p><a href="${safe}" style="display:inline-block;padding:.6rem 1.4rem;background:#7eb0d5;` +
-      `color:#103049;font-weight:600;text-decoration:none;border-radius:8px">Accedi ad Alumère</a></p>` +
-      `<p style="color:#6b7785;font-size:13px">Se il bottone non funziona, copia e incolla questo indirizzo:<br>` +
+      `color:#103049;font-weight:600;text-decoration:none;border-radius:8px">Sign in to Alumère</a></p>` +
+      `<p style="color:#6b7785;font-size:13px">If the button doesn't work, copy and paste this address:<br>` +
       `<span style="word-break:break-all">${safe}</span></p>` +
-      `<p style="color:#6b7785;font-size:13px">Se non hai richiesto tu l'accesso, ignora pure questa mail.</p>` +
+      `<p style="color:#6b7785;font-size:13px">If you didn't request this, you can ignore this email.</p>` +
       `</div>`,
   });
 }
@@ -241,7 +241,7 @@ function parseCookies(req) {
 }
 // Gate for mutating endpoints: never write to a project without a known author.
 function requireUser(req, res, next) {
-  if (!req.user) return res.status(401).json({ ok: false, error: "Devi identificarti per modificare.", needLogin: true });
+  if (!req.user) return res.status(401).json({ ok: false, error: "You must sign in to make changes.", needLogin: true });
   next();
 }
 
@@ -515,11 +515,11 @@ app.post("/api/auth/request", async (req, res) => {
   const user = userFromEmail((req.body || {}).email);
   if (!user) {
     const d = ALLOWED_EMAIL_DOMAIN ? `@${ALLOWED_EMAIL_DOMAIN}` : "aziendale";
-    return res.status(403).json({ ok: false, error: `Serve una mail ${d} valida.` });
+    return res.status(403).json({ ok: false, error: `Enter a valid ${d} email.` });
   }
   const ip = req.ip || req.socket?.remoteAddress || "unknown";
   if (!rateHit(emailHits, user.id, 5, 10 * 60 * 1000) || !rateHit(ipHits, ip, 60, 10 * 60 * 1000)) {
-    return res.status(429).json({ ok: false, error: "Troppe richieste, riprova tra qualche minuto." });
+    return res.status(429).json({ ok: false, error: "Too many requests, try again in a few minutes." });
   }
   prunePending();
   const token = crypto.randomBytes(32).toString("base64url");
@@ -533,7 +533,7 @@ app.post("/api/auth/request", async (req, res) => {
     pendingLogins.delete(token);
     persistPending();
     console.error(`[alumere][auth] invio mail fallito: ${e.message}`);
-    return res.status(502).json({ ok: false, error: "Invio della mail non riuscito, riprova." });
+    return res.status(502).json({ ok: false, error: "Couldn't send the email, try again." });
   }
   res.json({ ok: true, email: user.id });                  // generic — the client shows "controlla la posta"
 });
@@ -553,10 +553,10 @@ const authPage = (title, body) =>
   `background:#f5f7fa;color:#243240;font-family:${AUTH_FONT};line-height:1.5">` +
   `<main style="max-width:26rem;margin:1.5rem;padding:2rem 2.25rem;text-align:center;` +
   `background:#fff;border:1px solid #e4e8ee;border-radius:12px">${body}</main>`;
-const invalidLinkPage = () => authPage("Link non valido",
-  `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Link non valido o scaduto</h2>` +
-  `<p style="margin:0 0 1.25rem;color:#6b7785">Richiedi un nuovo accesso.</p>` +
-  `<p style="margin:0"><a href="/" style="color:#5f9bc9">Torna ad Alumère</a></p>`);
+const invalidLinkPage = () => authPage("Invalid link",
+  `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Invalid or expired link</h2>` +
+  `<p style="margin:0 0 1.25rem;color:#6b7785">Request a new sign-in link.</p>` +
+  `<p style="margin:0"><a href="/" style="color:#5f9bc9">Back to Alumère</a></p>`);
 
 // Login, step 2a: the emailed link lands HERE — and deliberately does NOT consume the token.
 // Anything in the mail's path may fetch the URL before the human does (corporate link scanners,
@@ -570,14 +570,14 @@ app.get("/api/auth/verify", (req, res) => {
   if (!pend || pend.exp <= Date.now()) return res.status(400).type("html").send(invalidLinkPage());
   // Note: no JS auto-submit here on purpose — a scanner that executes scripts would burn the
   // token again, putting us right back where we started. It has to be a human click.
-  return res.type("html").send(authPage("Conferma accesso",
-    `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Accedi ad Alumère</h2>` +
-    `<p style="margin:0 0 1.5rem">Stai per entrare come <strong>${escapeHtml(pend.user.name)}</strong><br>` +
+  return res.type("html").send(authPage("Confirm sign-in",
+    `<h2 style="margin:0 0 .5rem;font-size:1.3rem">Sign in to Alumère</h2>` +
+    `<p style="margin:0 0 1.5rem">You're about to sign in as <strong>${escapeHtml(pend.user.name)}</strong><br>` +
     `<span style="color:#6b7785;font-size:.9em">${escapeHtml(pend.user.id)}</span></p>` +
     `<form method="post" action="/api/auth/verify?token=${encodeURIComponent(token)}">` +
     `<button type="submit" style="font:inherit;font-weight:600;padding:.6rem 1.4rem;` +
     `background:#7eb0d5;color:#103049;border:1px solid #7eb0d5;border-radius:8px;cursor:pointer">` +
-    `Conferma l'accesso</button></form>`));
+    `Confirm sign-in</button></form>`));
 });
 
 // Login, step 2b: the confirm button lands here → consume the token, set the session, enter.
@@ -659,7 +659,7 @@ const texEscape = (s) => String(s)
   .replace(/~/g, "\\textasciitilde{}")
   .replace(/\^/g, "\\textasciicircum{}");
 app.post("/api/projects", requireUser, async (req, res) => {
-  const name = String((req.body || {}).name || "").trim().slice(0, 120) || "Nuovo progetto";
+  const name = String((req.body || {}).name || "").trim().slice(0, 120) || "New project";
   const id = crypto.randomUUID();
   try {
     const main = [
@@ -677,8 +677,8 @@ app.post("/api/projects", requireUser, async (req, res) => {
       "\\begin{document}",
       "\\maketitle",
       "",
-      "\\section{Introduzione}",
-      "Scrivi qui.",
+      "\\section{Introduction}",
+      "Write here.",
       "",
       "\\end{document}",
       "",
@@ -770,7 +770,7 @@ app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
   try {
     const files = await readFilesFlat(filesDir(id));
     const mainRel = pickMainTex(files);
-    if (!mainRel) return res.status(400).json({ ok: false, error: "Nessun file .tex nel progetto." });
+    if (!mainRel) return res.status(400).json({ ok: false, error: "No .tex file in the project." });
     dir = await mkdtemp(path.join(os.tmpdir(), "alumere-"));
     for (const f of files) {
       const rel = safeRelPath(f.path || "");
@@ -782,7 +782,7 @@ app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
     }
     const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG.xelatex);
     const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
-    if (!existsSync(pdfPath)) return res.status(422).json({ ok: false, error: "Compilazione fallita — apri il progetto nell'editor per i dettagli.", code });
+    if (!existsSync(pdfPath)) return res.status(422).json({ ok: false, error: "Compilation failed — open the project in the editor for details.", code });
     res.type("application/pdf").send(await readFile(pdfPath));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -831,12 +831,12 @@ app.get("/api/tags", requireUser, async (_req, res) => {
 app.post("/api/tags", requireUser, async (req, res) => {
   const name = String((req.body || {}).name || "").trim().slice(0, 40);
   let color = String((req.body || {}).color || "");
-  if (!name) return res.status(400).json({ ok: false, error: "Serve un nome per il tag." });
+  if (!name) return res.status(400).json({ ok: false, error: "Enter a tag name." });
   if (!TAG_COLORS.includes(color)) color = TAG_COLORS[0];
   try {
     const tag = await withTagsLock(async () => {
       const tags = await readTags();
-      if (tags.some((t) => t.name.toLowerCase() === name.toLowerCase())) throw new Error("Esiste già un tag con questo nome.");
+      if (tags.some((t) => t.name.toLowerCase() === name.toLowerCase())) throw new Error("A tag with this name already exists.");
       const t = { id: crypto.randomUUID(), name, color };
       tags.push(t);
       await writeTags(tags);

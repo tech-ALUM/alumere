@@ -237,8 +237,8 @@ function buildList(list) {
     nm.className = "rowname"; nm.textContent = node.name;
     const actions = document.createElement("span");
     actions.className = "rowactions";
-    const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rinomina";
-    const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Elimina";
+    const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rename";
+    const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Delete";
     actions.append(renameBtn, delBtn);
     row.append(tw, ic, nm);
     const here = node.type === "file" ? peersByFile.get(node.path) : null;
@@ -267,19 +267,19 @@ function buildList(list) {
 
 // Structure ops mutate the shared map, so they propagate live to every peer.
 function newFile() {
-  const name = prompt("Nome nuovo file:", "senza-titolo.tex");
+  const name = prompt("New file name:", "untitled.tex");
   if (!name) return;
   const clean = name.trim().replace(/^\/+|\/+$/g, "");
   if (!clean) return;
   const path = targetDir ? `${targetDir}/${clean}` : clean;
-  if (hasPath(path)) { alert("Esiste già un file con questo percorso."); return; }
+  if (hasPath(path)) { alert("A file with this path already exists."); return; }
   ydoc.transact(() => { filesMap.set(path, new Y.Text()); });
   pendingFolders.delete(targetDir);
   setUpdatedBy();
   openFile(path);
 }
 function newFolder() {
-  const name = prompt("Nome nuova cartella:", "cartella");
+  const name = prompt("New folder name:", "folder");
   if (!name) return;
   const clean = name.trim().replace(/^\/+|\/+$/g, "");
   if (!clean) return;
@@ -296,7 +296,7 @@ function moveEntry(oldPath, newPath, v) {
 }
 function renameNode(node) {
   const isFolder = node.type === "folder";
-  const nn = prompt("Rinomina in:", node.name);
+  const nn = prompt("Rename to:", node.name);
   if (!nn) return;
   const clean = nn.trim().replace(/^\/+|\/+$/g, "");
   if (!clean || clean === node.name) return;
@@ -317,7 +317,7 @@ function renameNode(node) {
     setUpdatedBy();
     if (reopen) openFile(reopen); else renderTree();
   } else {
-    if (hasPath(newPath)) { alert("Percorso già esistente."); return; }
+    if (hasPath(newPath)) { alert("Path already exists."); return; }
     const reopen = currentPath === node.path;
     if (reopen) currentPath = newPath;
     const v = filesMap.get(node.path);
@@ -327,7 +327,7 @@ function renameNode(node) {
   }
 }
 function deleteNode(node) {
-  if (!confirm(`Eliminare "${node.name}"?`)) return;
+  if (!confirm(`Delete "${node.name}"?`)) return;
   if (node.type === "folder") {
     const prefix = node.path + "/";
     const affected = fileEntries().filter(([p]) => p === node.path || p.startsWith(prefix));
@@ -412,7 +412,7 @@ function openFile(path) {
   const { EditorState } = CM.state;
   let state;
   if (isBinaryVal(val)) {
-    const msg = `% "${baseOf(path)}" è un asset binario (immagine/PDF).\n% È conservato nel progetto e usato in compilazione, ma non è modificabile qui.`;
+    const msg = `% "${baseOf(path)}" is a binary asset (image/PDF).\n% It's kept in the project and used at compile time, but can't be edited here.`;
     state = EditorState.create({ doc: msg, extensions: [...baseExtensions(), EditorView.editable.of(false), EditorState.readOnly.of(true)] });
   } else {
     const undoManager = new Y.UndoManager(val);
@@ -535,7 +535,7 @@ function renderIssues(issues) {
     if (canJump) row.type = "button";
     const badge = document.createElement("span");
     badge.className = "issue-badge";
-    badge.textContent = it.kind === "error" ? "errore" : "avviso";
+    badge.textContent = it.kind === "error" ? "error" : "warning";
     const msg = document.createElement("span");
     msg.className = "issue-msg"; msg.textContent = it.msg;
     row.append(badge, msg);
@@ -552,7 +552,7 @@ function renderIssues(issues) {
 
 let pdfBlob = null;
 async function compile() {
-  setStatus("busy", "Compilo…");
+  setStatus("busy", "Compiling…");
   const files = flattenForCompile();
   const payload = { files, main: detectMain(files), engine: engineSel.value };
   try {
@@ -568,14 +568,14 @@ async function compile() {
       try { await loadPdf(data.pdf); }                 // base64 → PDF.js canvases
       catch (err) { console.warn("PDF render failed:", err); }
       showTab("pdf");                                  // pdfDoc is set now → the zoom bar shows
-      setStatus("ok", "Compilato ✓");
+      setStatus("ok", "Compiled ✓");
     } else {
       const nErr = issues.filter((x) => x.kind === "error").length;
-      setStatus("err", nErr ? `${nErr} error${nErr === 1 ? "e" : "i"}` : "Errori");
+      setStatus("err", nErr ? `${nErr} error${nErr === 1 ? "" : "s"}` : "Errors");
       showTab("log");
     }
   } catch (e) {
-    renderLog("Il server di compilazione non risponde.\n→ " + e.message);
+    renderLog("The compile server isn't responding.\n→ " + e.message);
     renderIssues([]);
     setStatus("err", "Offline"); showTab("log");
   }
@@ -906,7 +906,7 @@ const OFFLINE_GRACE_MS = 5000;
 let offlineTimer = null;
 function noteNotSynced() {
   if (document.body.dataset.conn === "offline") return;      // already loud
-  setConnState("connecting", "connessione…");
+  setConnState("connecting", "connecting…");
   if (!offlineTimer) offlineTimer = setTimeout(() => {
     offlineTimer = null;
     setConnState("offline", "○ offline");
@@ -958,7 +958,7 @@ function authorUser(by) {
   const { color } = colorFor((by && by.id) || name || "system");
   return { name, color };
 }
-const KIND_BADGE = { initial: "stato iniziale", restore: "ripristino", checkpoint: "checkpoint" };
+const KIND_BADGE = { initial: "initial state", restore: "restore", checkpoint: "checkpoint" };
 const escapeHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
 function openHistory() {
@@ -979,11 +979,11 @@ async function loadTimeline() {
     const d = await histJson(histApi(""));
     histVersions = d.versions || [];
   } catch (e) {
-    list.innerHTML = `<div class="hist-loading">Cronologia non disponibile.<br><span class="muted">${escapeHtml(e.message)}</span></div>`;
+    list.innerHTML = `<div class="hist-loading">History unavailable.<br><span class="muted">${escapeHtml(e.message)}</span></div>`;
     return;
   }
   if (!histVersions.length) {
-    list.innerHTML = `<div class="hist-loading">Ancora nessuna versione salvata.<br><span class="muted">Le versioni compaiono man mano che si scrive.</span></div>`;
+    list.innerHTML = `<div class="hist-loading">No versions saved yet.<br><span class="muted">Versions appear as you write.</span></div>`;
     return;
   }
   list.innerHTML = "";
@@ -1000,12 +1000,12 @@ async function loadTimeline() {
     const when = document.createElement("span");
     when.className = "hist-when"; when.textContent = fmtWhen(v.at);
     line1.appendChild(when);
-    if (i === 0) { const tag = document.createElement("span"); tag.className = "hist-tag now"; tag.textContent = "attuale"; line1.appendChild(tag); }
+    if (i === 0) { const tag = document.createElement("span"); tag.className = "hist-tag now"; tag.textContent = "current"; line1.appendChild(tag); }
     if (KIND_BADGE[v.kind]) { const tag = document.createElement("span"); tag.className = "hist-tag"; tag.textContent = KIND_BADGE[v.kind]; line1.appendChild(tag); }
     body.appendChild(line1);
     const line2 = document.createElement("div");
     line2.className = "hist-item-sub muted";
-    line2.textContent = v.label ? v.label : `${who.name} · ${v.changed} ${v.changed === 1 ? "file" : "file"} modificat${v.changed === 1 ? "o" : "i"}`;
+    line2.textContent = v.label ? v.label : `${who.name} · ${v.changed} file${v.changed === 1 ? "" : "s"} changed`;
     body.appendChild(line2);
     item.appendChild(body);
     item.addEventListener("click", () => selectVersion(v.id));
@@ -1023,10 +1023,10 @@ async function selectVersion(id) {
   const items = $("histList").querySelectorAll(".hist-item");
   if (items[idx]) items[idx].classList.add("sel");
   const detail = $("histDetail");
-  detail.innerHTML = `<div class="hist-placeholder">Carico la versione…</div>`;
+  detail.innerHTML = `<div class="hist-placeholder">Loading version…</div>`;
   let version;
   try { version = (await histJson(histApi(`/${id}`))).version; }
-  catch (e) { detail.innerHTML = `<div class="hist-placeholder">Errore: ${escapeHtml(e.message)}</div>`; return; }
+  catch (e) { detail.innerHTML = `<div class="hist-placeholder">Error: ${escapeHtml(e.message)}</div>`; return; }
   renderDetail(version, idx);
 }
 
@@ -1044,20 +1044,20 @@ function renderDetail(version, idx) {
   const info = document.createElement("div");
   info.className = "hist-meta-info";
   info.innerHTML = `<div class="hist-meta-top"><b>${escapeHtml(who.name)}</b> <span class="muted">· ${escapeHtml(fmtWhen(version.at))}</span></div>
-    <div class="hist-meta-sub muted">${version.label ? escapeHtml(version.label) : (KIND_BADGE[version.kind] || "salvataggio automatico")}</div>`;
+    <div class="hist-meta-sub muted">${version.label ? escapeHtml(version.label) : (KIND_BADGE[version.kind] || "auto-save")}</div>`;
   meta.appendChild(info);
 
   const actions = document.createElement("div");
   actions.className = "hist-actions";
   const labelBtn = document.createElement("button");
-  labelBtn.className = "btn small"; labelBtn.textContent = version.label ? "✎ Etichetta" : "＋ Etichetta";
-  labelBtn.title = "Dai un nome a questa versione (milestone)";
+  labelBtn.className = "btn small"; labelBtn.textContent = version.label ? "✎ Label" : "＋ Label";
+  labelBtn.title = "Name this version (milestone)";
   labelBtn.addEventListener("click", () => labelVersion(version));
   const restoreBtn = document.createElement("button");
-  restoreBtn.className = "btn primary small"; restoreBtn.textContent = "↩ Ripristina";
-  restoreBtn.title = "Riporta il progetto a questa versione";
+  restoreBtn.className = "btn primary small"; restoreBtn.textContent = "↩ Restore";
+  restoreBtn.title = "Restore the project to this version";
   restoreBtn.disabled = isNewest;                 // restoring the current state is a no-op
-  if (isNewest) restoreBtn.title = "È già la versione attuale";
+  if (isNewest) restoreBtn.title = "This is already the current version";
   restoreBtn.addEventListener("click", () => restoreVersion(version));
   actions.append(labelBtn, restoreBtn);
   meta.appendChild(actions);
@@ -1074,8 +1074,8 @@ function renderDetail(version, idx) {
     b.addEventListener("click", () => { if (histCompare !== mode) { histCompare = mode; renderDetail(version, idx); } });
     return b;
   };
-  bar.appendChild(mk("prev", "con la precedente"));
-  bar.appendChild(mk("current", "con la copia attuale"));
+  bar.appendChild(mk("prev", "vs previous"));
+  bar.appendChild(mk("current", "vs current copy"));
   detail.appendChild(bar);
 
   // Body: file list + diff.
@@ -1101,13 +1101,13 @@ function renderDetail(version, idx) {
   // Pick a file to show: keep the current one if it's in the list, else the first changed.
   const pick = shown.find((f) => f.path === histSelPath) || shown[0];
   if (pick) { histSelPath = pick.path; for (const li of files.children) li.classList.toggle("sel", li.querySelector(".hist-file-name").textContent === pick.path); showDiff(version, pick); }
-  else diff.innerHTML = `<div class="hist-placeholder">Questa versione non contiene file.</div>`;
+  else diff.innerHTML = `<div class="hist-placeholder">This version has no files.</div>`;
 }
 
 async function showDiff(version, file) {
   const diff = $("histDiff");
   if (!diff) return;
-  diff.innerHTML = `<div class="hist-placeholder">Calcolo differenze…</div>`;
+  diff.innerHTML = `<div class="hist-placeholder">Computing differences…</div>`;
   try {
     let before, after;
     if (histCompare === "current") {
@@ -1123,12 +1123,12 @@ async function showDiff(version, file) {
       after = await fileAt(version.id, file.path, false);
     }
     if (before.encoding === "base64" || after.encoding === "base64") {
-      diff.innerHTML = `<div class="hist-placeholder">📦 File binario — il confronto testuale non è disponibile.</div>`;
+      diff.innerHTML = `<div class="hist-placeholder">📦 Binary file — text comparison isn't available.</div>`;
       return;
     }
     diff.innerHTML = renderDiff(before.content || "", after.content || "");
   } catch (e) {
-    diff.innerHTML = `<div class="hist-placeholder">Errore nel diff: ${escapeHtml(e.message)}</div>`;
+    diff.innerHTML = `<div class="hist-placeholder">Diff error: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1216,7 +1216,7 @@ function markIntraline(rows) {
   }
 }
 function renderDiff(beforeText, afterText) {
-  if (beforeText === afterText) return `<div class="hist-placeholder">Nessuna differenza in questo file.</div>`;
+  if (beforeText === afterText) return `<div class="hist-placeholder">No differences in this file.</div>`;
   const ops = lineDiff(beforeText.split("\n"), afterText.split("\n"));
   // number lines and fold long unchanged runs
   let oldN = 0, newN = 0;
@@ -1250,24 +1250,24 @@ function renderDiff(beforeText, afterText) {
 }
 
 async function labelVersion(version) {
-  const next = prompt("Nome della versione (vuoto per rimuovere l'etichetta):", version.label || "");
+  const next = prompt("Version name (empty to remove the label):", version.label || "");
   if (next === null) return;                       // cancelled
   try {
     await histJson(histApi(`/${version.id}/label`), {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: next.trim() }),
     });
     await loadTimeline();                          // refresh list + detail
-  } catch (e) { alert("Impossibile salvare l'etichetta: " + e.message); }
+  } catch (e) { alert("Couldn't save the label: " + e.message); }
 }
 
 async function restoreVersion(version) {
-  if (!booted || !filesMap) { alert("Attendi il caricamento del progetto prima di ripristinare."); return; }
+  if (!booted || !filesMap) { alert("Wait for the project to load before restoring."); return; }
   const when = fmtWhen(version.at);
-  if (!confirm(`Ripristinare la versione del ${when}?\n\nIl contenuto attuale del progetto viene sostituito con quello di questa versione, per tutti. Lo stato attuale resta comunque nella cronologia: puoi tornare indietro in qualsiasi momento.`)) return;
-  setStatus("busy", "Ripristino…");
+  if (!confirm(`Restore the version from ${when}?\n\nThe project's current content is replaced with this version's, for everyone. The current state stays in the history: you can go back at any time.`)) return;
+  setStatus("busy", "Restoring…");
   let tree;
   try { tree = (await histJson(histApi(`/${version.id}/tree`))).files || []; }
-  catch (e) { setStatus("err", "Errore"); alert("Impossibile leggere la versione: " + e.message); return; }
+  catch (e) { setStatus("err", "Error"); alert("Couldn't read the version: " + e.message); return; }
 
   const target = new Map(tree.map((f) => [f.path, f]));
   // Bump the break nonce FIRST so the store triggered by this change is forced into a fresh,
@@ -1293,7 +1293,7 @@ async function restoreVersion(version) {
   const keep = currentPath && hasPath(currentPath) ? currentPath : null;
   if (keep) openFile(keep);
   closeHistory();
-  setStatus("ok", "Ripristinato ✓");
+  setStatus("ok", "Restored ✓");
   compile();                                       // reflect the restored content in the preview
 }
 
@@ -1305,8 +1305,8 @@ const newBreakNonce = () => Date.now() + "-" + Math.random().toString(36).slice(
 // content may be untouched, so the last EDITOR would be the wrong author). The version
 // itself is made by the debounced server store (~2s), hence the short poll to show it.
 async function checkpointNow() {
-  if (!booted || !filesMap) { alert("Attendi il caricamento del progetto prima di creare un checkpoint."); return; }
-  const label = prompt("Nome del checkpoint (opzionale):", "");
+  if (!booted || !filesMap) { alert("Wait for the project to load before creating a checkpoint."); return; }
+  const label = prompt("Checkpoint name (optional):", "");
   if (label === null) return;                      // cancelled
   const btn = $("histCheckpoint");
   const prevNewest = histVersions[0] ? histVersions[0].id : null;
@@ -1328,7 +1328,7 @@ async function checkpointNow() {
     }
     // Offline or slow store: the nonce is already in the doc, so the checkpoint will be
     // cut at the next successful save — nothing is lost, it just isn't visible yet.
-    alert("Il checkpoint non è ancora comparso: verrà creato al prossimo salvataggio (ad es. quando torni online).");
+    alert("The checkpoint hasn't appeared yet: it'll be created on the next save (e.g. when you come back online).");
   } finally {
     btn.disabled = false; btn.textContent = "📌 Checkpoint";
   }
@@ -1343,14 +1343,14 @@ async function init() {
   // Confirm the project exists (friendly error screen) before opening the socket.
   let meta;
   try { const d = await (await fetch(`/api/projects/${PROJECT_ID}`)).json(); if (!d.ok) throw 0; meta = d.project; }
-  catch { document.body.innerHTML = errorScreen("Progetto non trovato o server irraggiungibile."); return; }
-  $("projName").textContent = meta.name || "Progetto";
-  document.title = (meta.name || "Progetto") + " — Alumère";
+  catch { document.body.innerHTML = errorScreen("Project not found or server unreachable."); return; }
+  $("projName").textContent = meta.name || "Project";
+  document.title = (meta.name || "Project") + " — Alumère";
   initEditorTheme();
 
   if (!window.YCOLLAB) {
-    setConnState("broken", "collab non disponibile");   // not "offline": nothing here will sync later
-    editorHost.innerHTML = `<div style="padding:16px;font:13px/1.5 'Inter',sans-serif;color:#5a3a06;background:#fff3cd">Il bundle real-time (<code>window.YCOLLAB</code>) non è caricato. Ricostruisci <code>public/vendor/codemirror.js</code> con <code>npm run build:client</code> e ricarica.</div>`;
+    setConnState("broken", "collab unavailable");   // not "offline": nothing here will sync later
+    editorHost.innerHTML = `<div style="padding:16px;font:13px/1.5 'Inter',sans-serif;color:#5a3a06;background:#fff3cd">The real-time bundle (<code>window.YCOLLAB</code>) isn't loaded. Rebuild <code>public/vendor/codemirror.js</code> with <code>npm run build:client</code> and reload.</div>`;
     return;
   }
   ({ Y, HocuspocusProvider, yCollab, yUndoManagerKeymap } = window.YCOLLAB);

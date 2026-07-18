@@ -28,7 +28,7 @@ function setStatus(kind, text) { statusEl.className = "status " + kind; statusEl
 const openProject = (id) => { location.href = "editor.html?p=" + encodeURIComponent(id); };
 function fmtAbs(s) { try { return new Date(s).toLocaleString(); } catch { return ""; } }
 const enc = encodeURIComponent;
-const safeFile = (s) => String(s || "progetto").replace(/[^\p{L}\p{N}._ -]/gu, "").trim() || "progetto";
+const safeFile = (s) => String(s || "project").replace(/[^\p{L}\p{N}._ -]/gu, "").trim() || "project";
 const tagById = (id) => TAGS.find((t) => t.id === id);
 const projTags = (p) => (p.tags || []).map(tagById).filter(Boolean);   // known tags only
 
@@ -42,16 +42,17 @@ const ICONS = {
   tag: svgIcon('<path d="M20.6 13.4l-7.2 7.2a1.8 1.8 0 0 1-2.6 0l-7-7A1.8 1.8 0 0 1 3.3 12.3V5.3A1.8 1.8 0 0 1 5 3.5h7a1.8 1.8 0 0 1 1.3.5l7.3 7.3a1.8 1.8 0 0 1 0 2.1z"/><circle cx="7.8" cy="7.8" r="1.2"/>'),
 };
 
+// Compact relative time in English ("3 months ago", "yesterday", "now"), Overleaf-style.
 function relTime(s) {
   const t = new Date(s).getTime();
   if (!t) return "";
   const diff = Date.now() - t, min = 60e3, h = 60 * min, d = 24 * h;
-  if (diff < min) return "ora";
-  if (diff < h) return `${Math.floor(diff / min)} min fa`;
-  if (diff < d) return `${Math.floor(diff / h)} h fa`;
-  if (diff < 30 * d) { const n = Math.floor(diff / d); return n <= 1 ? "ieri" : `${n} giorni fa`; }
-  if (diff < 365 * d) { const n = Math.floor(diff / (30 * d)); return n <= 1 ? "1 mese fa" : `${n} mesi fa`; }
-  const n = Math.floor(diff / (365 * d)); return n <= 1 ? "1 anno fa" : `${n} anni fa`;
+  if (diff < min) return "now";
+  if (diff < h) return `${Math.floor(diff / min)} min ago`;
+  if (diff < d) return `${Math.floor(diff / h)} h ago`;
+  if (diff < 30 * d) { const n = Math.floor(diff / d); return n <= 1 ? "yesterday" : `${n} days ago`; }
+  if (diff < 365 * d) { const n = Math.floor(diff / (30 * d)); return n <= 1 ? "1 month ago" : `${n} months ago`; }
+  const n = Math.floor(diff / (365 * d)); return n <= 1 ? "1 year ago" : `${n} years ago`;
 }
 
 async function load() {
@@ -64,7 +65,7 @@ async function load() {
     TAGS = tj.tags || [];
     render();
     setStatus("idle", "");
-  } catch (e) { setStatus("err", "Errore di rete"); }
+  } catch (e) { setStatus("err", "Network error"); }
 }
 
 // ---------- views / filtering ----------
@@ -84,19 +85,19 @@ function currentList() {
 }
 function titleFor() {
   switch (view.kind) {
-    case "archived": return "Archiviati";
-    case "untagged": return "Senza tag";
+    case "archived": return "Archived";
+    case "untagged": return "No tag";
     case "tag": { const t = tagById(view.id); return t ? t.name : "Tag"; }
-    default: return "Tutti i progetti";
+    default: return "All projects";
   }
 }
 function emptyMsg() {
-  if (query.trim()) return `Nessun progetto per «${query.trim()}».`;
+  if (query.trim()) return `No projects for «${query.trim()}».`;
   switch (view.kind) {
-    case "archived": return "Nessun progetto archiviato.";
-    case "untagged": return "Nessun progetto senza tag.";
-    case "tag": return "Nessun progetto con questo tag.";
-    default: return "Nessun progetto.";
+    case "archived": return "No archived projects.";
+    case "untagged": return "No untagged projects.";
+    case "tag": return "No projects with this tag.";
+    default: return "No projects.";
   }
 }
 
@@ -111,17 +112,22 @@ function renderSidebar() {
   sideAside.querySelector('.side-item[data-view="all"]').classList.toggle("active", view.kind === "all");
   sideAside.querySelector('.side-item[data-view="archived"]').classList.toggle("active", view.kind === "archived");
 
+  // Tags section: heading, then "New tag" at the TOP, then the tag list + "No tag".
   sideTagsEl.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "side-tags-head"; head.textContent = "Tags";
+  sideTagsEl.appendChild(head);
+  const add = document.createElement("button");
+  add.className = "side-newtag"; add.dataset.act = "new-tag";
+  add.innerHTML = `<span class="side-ic">＋</span> New tag`;
+  sideTagsEl.appendChild(add);
   if (TAGS.length) {
-    const head = document.createElement("div");
-    head.className = "side-tags-head"; head.textContent = "Tag";
-    sideTagsEl.appendChild(head);
     for (const t of TAGS) {
       const n = PROJECTS.filter((p) => !p.archived && (p.tags || []).includes(t.id)).length;
       const item = document.createElement("button");
       item.className = "side-item tag-item" + (view.kind === "tag" && view.id === t.id ? " active" : "");
       item.dataset.view = "tag"; item.dataset.tag = t.id;
-      item.innerHTML = `<span class="tag-dot"></span><span class="ti-name"></span><span class="side-count">${n || ""}</span><span class="ti-del" data-act="del-tag" data-tag="${t.id}" title="Elimina tag" aria-label="Elimina tag">×</span>`;
+      item.innerHTML = `<span class="tag-dot"></span><span class="ti-name"></span><span class="side-count">${n || ""}</span><span class="ti-del" data-act="del-tag" data-tag="${t.id}" title="Delete tag" aria-label="Delete tag">×</span>`;
       item.querySelector(".tag-dot").style.setProperty("--tc", t.color);
       item.querySelector(".ti-name").textContent = t.name;
       sideTagsEl.appendChild(item);
@@ -130,13 +136,9 @@ function renderSidebar() {
     const un = document.createElement("button");
     un.className = "side-item" + (view.kind === "untagged" ? " active" : "");
     un.dataset.view = "untagged";
-    un.innerHTML = `<span class="side-ic">○</span><span class="ti-name">Senza tag</span><span class="side-count">${nUn || ""}</span>`;
+    un.innerHTML = `<span class="side-ic">○</span><span class="ti-name">No tag</span><span class="side-count">${nUn || ""}</span>`;
     sideTagsEl.appendChild(un);
   }
-  const add = document.createElement("button");
-  add.className = "side-newtag"; add.dataset.act = "new-tag";
-  add.innerHTML = `<span class="side-ic">＋</span> Nuovo tag`;
-  sideTagsEl.appendChild(add);
 }
 
 function renderMain() {
@@ -155,7 +157,7 @@ function renderMain() {
       for (const p of list) rowsEl.appendChild(rowFor(p));
     }
   }
-  footEl.textContent = trulyEmpty ? "" : `${list.length} progett${list.length === 1 ? "o" : "i"}`;
+  footEl.textContent = trulyEmpty ? "" : `${list.length} project${list.length === 1 ? "" : "s"}`;
 }
 
 function fillChips(container, p) {
@@ -164,12 +166,12 @@ function fillChips(container, p) {
     const chip = document.createElement("span");
     chip.className = "tag-chip";
     chip.style.setProperty("--tc", t.color);
-    chip.innerHTML = `<span class="tag-dot"></span><span class="tc-name"></span><button class="tag-x" aria-label="Togli tag" title="Togli tag">×</button>`;
+    chip.innerHTML = `<span class="tag-dot"></span><span class="tc-name"></span><button class="tag-x" aria-label="Remove tag" title="Remove tag">×</button>`;
     chip.querySelector(".tc-name").textContent = t.name;
     chip.querySelector(".tag-x").addEventListener("click", async (e) => {
       e.stopPropagation();
       try { await setProjectTags(p, (p.tags || []).filter((x) => x !== t.id)); render(); }
-      catch { setStatus("err", "Operazione fallita"); }
+      catch { setStatus("err", "Operation failed"); }
     });
     container.appendChild(chip);
   }
@@ -187,17 +189,17 @@ function rowFor(p) {
       <span class="proj-row-icon">∑</span>
       <span class="proj-row-name"></span>
       <span class="tag-chips"></span>
-      <button class="tag-add" aria-label="Aggiungi tag" title="Tag">${ICONS.tag}</button>
+      <button class="tag-add" aria-label="Add tag" title="Tag">${ICONS.tag}</button>
     </div>
     <div class="c-owner"></div>
     <div class="c-mod"><span class="mod-when"></span><span class="mod-by"></span></div>
     <div class="c-actions">
-      <button class="row-act row-zip" data-tip="Scarica sorgenti (.zip)" aria-label="Scarica .zip">${ICONS.download}</button>
-      <button class="row-act row-pdf" data-tip="Scarica PDF" aria-label="Scarica PDF"><span class="pdf-badge">PDF</span></button>
-      <button class="row-act row-arch" data-tip="${archived ? "Ripristina" : "Archivia"}" aria-label="${archived ? "Ripristina" : "Archivia"}">${archived ? ICONS.restore : ICONS.archive}</button>
-      <button class="row-act row-del" data-tip="Elimina" aria-label="Elimina">${ICONS.trash}</button>
+      <button class="row-act row-zip" data-tip="Download sources (.zip)" aria-label="Download .zip">${ICONS.download}</button>
+      <button class="row-act row-pdf" data-tip="Download PDF" aria-label="Download PDF"><span class="pdf-badge">PDF</span></button>
+      <button class="row-act row-arch" data-tip="${archived ? "Restore" : "Archive"}" aria-label="${archived ? "Restore" : "Archive"}">${archived ? ICONS.restore : ICONS.archive}</button>
+      <button class="row-act row-del" data-tip="Delete" aria-label="Delete">${ICONS.trash}</button>
     </div>`;
-  row.querySelector(".proj-row-name").textContent = p.name || "Senza nome";
+  row.querySelector(".proj-row-name").textContent = p.name || "Untitled";
   row.querySelector(".c-owner").textContent = (p.createdBy && p.createdBy.name) || "—";
   const when = row.querySelector(".mod-when");
   when.textContent = relTime(p.updatedAt);
@@ -210,8 +212,8 @@ function rowFor(p) {
   row.addEventListener("keydown", (e) => { if (e.key === "Enter") openProject(p.id); });
   const stop = (sel, fn) => { const el = row.querySelector(sel); el.addEventListener("click", (e) => { e.stopPropagation(); fn(el); }); };
   stop(".tag-add", (el) => openTagMenu(p, el));
-  stop(".row-zip", () => downloadBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`, "Preparo lo zip…"));
-  stop(".row-pdf", () => downloadBlob(`/api/projects/${enc(p.id)}/pdf`, `${safeFile(p.name)}.pdf`, "Compilo il PDF…"));
+  stop(".row-zip", () => downloadBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`, "Preparing the zip…"));
+  stop(".row-pdf", () => downloadBlob(`/api/projects/${enc(p.id)}/pdf`, `${safeFile(p.name)}.pdf`, "Compiling the PDF…"));
   stop(".row-arch", () => toggleArchive(p, !archived));
   stop(".row-del", () => removeProject(p));
   return row;
@@ -255,7 +257,7 @@ function openTagMenu(p, anchor) {
   const build = () => {
     pop.innerHTML = "";
     if (!TAGS.length) {
-      const em = document.createElement("div"); em.className = "tag-pop-empty"; em.textContent = "Nessun tag ancora.";
+      const em = document.createElement("div"); em.className = "tag-pop-empty"; em.textContent = "No tags yet.";
       pop.appendChild(em);
     }
     for (const t of TAGS) {
@@ -273,14 +275,14 @@ function openTagMenu(p, anchor) {
           renderSidebar();
           if (!inView(p)) { close(); renderMain(); }
           else { build(); refreshRowChips(p); placePopover(pop, anchor); }
-        } catch { setStatus("err", "Operazione fallita"); }
+        } catch { setStatus("err", "Operation failed"); }
       });
       pop.appendChild(item);
     }
     const sep = document.createElement("div"); sep.className = "tag-menu-sep"; pop.appendChild(sep);
     const add = document.createElement("button");
     add.className = "tag-menu-item new";
-    add.innerHTML = `<span class="tag-check">＋</span><span class="tm-name">Nuovo tag…</span>`;
+    add.innerHTML = `<span class="tag-check">＋</span><span class="tm-name">New tag…</span>`;
     add.addEventListener("click", async (e) => {
       e.stopPropagation();
       close();
@@ -306,10 +308,10 @@ function openCreateTag(anchor) {
     const pop = document.createElement("div");
     pop.className = "tag-pop create";
     pop.innerHTML = `
-      <input class="tag-name-input" type="text" maxlength="40" placeholder="Nome del tag" autocomplete="off" spellcheck="false" />
-      <div class="tag-swatches">${TAG_COLORS.map((c, i) => `<button type="button" class="tag-swatch${i === 0 ? " sel" : ""}" data-c="${c}" aria-label="Colore" style="--tc:${c}"></button>`).join("")}</div>
+      <input class="tag-name-input" type="text" maxlength="40" placeholder="Tag name" autocomplete="off" spellcheck="false" />
+      <div class="tag-swatches">${TAG_COLORS.map((c, i) => `<button type="button" class="tag-swatch${i === 0 ? " sel" : ""}" data-c="${c}" aria-label="Colour" style="--tc:${c}"></button>`).join("")}</div>
       <div class="tag-pop-err" hidden></div>
-      <div class="tag-pop-actions"><button type="button" class="tag-cancel">Annulla</button><button type="button" class="tag-create">Crea</button></div>`;
+      <div class="tag-pop-actions"><button type="button" class="tag-cancel">Cancel</button><button type="button" class="tag-create">Create</button></div>`;
     document.body.appendChild(pop);
     placePopover(pop, anchor);
     let color = TAG_COLORS[0];
@@ -332,7 +334,7 @@ function openCreateTag(anchor) {
       if (!name) { input.focus(); return; }
       const r = await createTag(name, color);
       if (r.ok) done(r.tag);
-      else { errEl.textContent = r.error || "Errore"; errEl.hidden = false; }
+      else { errEl.textContent = r.error || "Error"; errEl.hidden = false; }
     };
     const onKey = (e) => {
       if (e.key === "Escape") { e.stopPropagation(); done(null); }
@@ -365,12 +367,12 @@ async function createTag(name, color) {
 async function deleteTag(id) {
   const t = tagById(id);
   const n = PROJECTS.filter((p) => (p.tags || []).includes(id)).length;
-  if (!confirm(`Elimina il tag «${t ? t.name : ""}»?` + (n ? ` Verrà tolto da ${n} progett${n === 1 ? "o" : "i"}.` : ""))) return;
+  if (!confirm(`Delete the tag «${t ? t.name : ""}»?` + (n ? ` It will be removed from ${n} project${n === 1 ? "" : "s"}.` : ""))) return;
   try {
     await fetch("/api/tags/" + enc(id), { method: "DELETE" });
     if (view.kind === "tag" && view.id === id) view = { kind: "all" };
     await load();
-  } catch { setStatus("err", "Eliminazione tag fallita"); }
+  } catch { setStatus("err", "Tag delete failed"); }
 }
 
 // ---------- row actions ----------
@@ -379,7 +381,7 @@ async function downloadBlob(url, filename, busyMsg) {
   try {
     const res = await fetch(url);
     if (!res.ok) {
-      let msg = "Operazione fallita";
+      let msg = "Operation failed";
       try { msg = (await res.json()).error || msg; } catch {}
       setStatus("err", msg);
       return;
@@ -390,47 +392,47 @@ async function downloadBlob(url, filename, busyMsg) {
     a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    setStatus("ok", "Pronto ✓");
-  } catch { setStatus("err", "Download fallito"); }
+    setStatus("ok", "Done ✓");
+  } catch { setStatus("err", "Download failed"); }
 }
 
 async function toggleArchive(p, archived) {
-  setStatus("busy", archived ? "Archivio…" : "Ripristino…");
+  setStatus("busy", archived ? "Archiving…" : "Restoring…");
   try {
     const res = await fetch(`/api/projects/${enc(p.id)}/archive`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ archived }),
     });
     const data = await res.json();
-    if (data.ok) { await load(); setStatus("ok", archived ? "Archiviato ✓" : "Ripristinato ✓"); }
-    else setStatus("err", data.error || "Operazione fallita");
-  } catch { setStatus("err", "Operazione fallita"); }
+    if (data.ok) { await load(); setStatus("ok", archived ? "Archived ✓" : "Restored ✓"); }
+    else setStatus("err", data.error || "Operation failed");
+  } catch { setStatus("err", "Operation failed"); }
 }
 
 async function removeProject(p) {
-  if (!confirm(`Eliminare "${p.name}"? L'operazione non è reversibile, per nessuno.`)) return;
+  if (!confirm(`Delete "${p.name}"? This can't be undone, for anyone.`)) return;
   try { await fetch(`/api/projects/${enc(p.id)}`, { method: "DELETE" }); load(); }
-  catch { setStatus("err", "Eliminazione fallita"); }
+  catch { setStatus("err", "Delete failed"); }
 }
 
 // ---------- create / upload project ----------
 async function createProject() {
-  const name = prompt("Nome del nuovo progetto:", "");
+  const name = prompt("New project name:", "");
   if (name === null) return;
-  setStatus("busy", "Creo…");
+  setStatus("busy", "Creating…");
   try {
     const res = await fetch("/api/projects", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }),
     });
     const data = await res.json();
-    if (data.ok) { setStatus("ok", "Creato ✓"); openProject(data.id); }
-    else setStatus("err", data.error || "Creazione fallita");
-  } catch { setStatus("err", "Creazione fallita"); }
+    if (data.ok) { setStatus("ok", "Created ✓"); openProject(data.id); }
+    else setStatus("err", data.error || "Create failed");
+  } catch { setStatus("err", "Create failed"); }
 }
 
 zipInput.addEventListener("change", async () => {
   const file = zipInput.files[0];
   if (!file) return;
-  setStatus("busy", "Carico…");
+  setStatus("busy", "Uploading…");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let bin = "";
@@ -441,13 +443,13 @@ zipInput.addEventListener("change", async () => {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: file.name, zip }),
     });
     const data = await res.json();
-    if (data.ok) { setStatus("ok", "Caricato ✓"); openProject(data.id); }
-    else setStatus("err", data.error || "Upload fallito");
-  } catch (e) { setStatus("err", "Upload fallito"); }
+    if (data.ok) { setStatus("ok", "Uploaded ✓"); openProject(data.id); }
+    else setStatus("err", data.error || "Upload failed");
+  } catch (e) { setStatus("err", "Upload failed"); }
   finally { zipInput.value = ""; }
 });
 
-// ---------- "Nuovo progetto" dropdown ----------
+// ---------- "New project" dropdown ----------
 (function wireNewProjMenu() {
   const menu = document.getElementById("newProjMenu");
   const btn = document.getElementById("newProjBtn");

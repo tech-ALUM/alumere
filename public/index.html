@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Alumère — Progetti</title>
+<title>Alumère — Projects</title>
 <script>/* apply the saved app theme before first paint (auto = follow the system) */
 try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")document.documentElement.dataset.appTheme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
@@ -17,13 +17,13 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     </div>
     <div class="toolbar">
       <div class="menu" id="settingsMenu">
-        <button id="settingsBtn" class="btn" title="Impostazioni (aspetto)" aria-haspopup="true">⚙</button>
+        <button id="settingsBtn" class="btn" title="Settings (appearance)" aria-haspopup="true">⚙</button>
         <div class="menu-pop" hidden>
-          <label>Aspetto
-            <select id="appTheme" title="Tema chiaro/scuro dell'interfaccia">
-              <option value="auto" selected>Auto (sistema)</option>
-              <option value="light">Chiaro</option>
-              <option value="dark">Scuro</option>
+          <label>Appearance
+            <select id="appTheme" title="Light/dark theme of the interface">
+              <option value="auto" selected>Auto (system)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
             </select>
           </label>
         </div>
@@ -37,24 +37,24 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
       <div class="menu newproj" id="newProjMenu">
         <button id="newProjBtn" class="btn primary block" aria-haspopup="true">
-          <span class="ic">＋</span> Nuovo progetto <span class="caret">▾</span>
+          <span class="ic">＋</span> New project <span class="caret">▾</span>
         </button>
         <div class="menu-pop" hidden>
-          <button class="menu-item" id="npEmpty"><span class="menu-ic">📄</span> Progetto vuoto</button>
-          <button class="menu-item" id="npTemplate" disabled title="Presto — prima scriviamo i template">
-            <span class="menu-ic">📐</span> Da template <span class="soon">presto</span>
+          <button class="menu-item" id="npEmpty"><span class="menu-ic">📄</span> Empty project</button>
+          <button class="menu-item" id="npTemplate" disabled title="Soon — we'll write the templates first">
+            <span class="menu-ic">📐</span> From template <span class="soon">soon</span>
           </button>
-          <button class="menu-item" id="npUpload"><span class="menu-ic">⬆</span> Carica progetto (.zip)</button>
+          <button class="menu-item" id="npUpload"><span class="menu-ic">⬆</span> Upload project (.zip)</button>
         </div>
       </div>
 
       <nav class="side-nav" id="sideNav">
         <button class="side-item active" data-view="all">
-          <span class="side-ic">🗂</span> Tutti i progetti
+          <span class="side-ic">🗂</span> All projects
           <span class="side-count" id="countAll"></span>
         </button>
         <button class="side-item" data-view="archived">
-          <span class="side-ic">🗄</span> Archiviati
+          <span class="side-ic">🗄</span> Archived
           <span class="side-count" id="countArch"></span>
         </button>
       </nav>
@@ -63,26 +63,26 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 
     <main class="home-main">
       <div class="home-main-head">
-        <h1 id="viewTitle">Tutti i progetti</h1>
+        <h1 id="viewTitle">All projects</h1>
         <div class="search">
           <span class="search-ic">🔎</span>
-          <input id="search" type="search" placeholder="Cerca progetto…" autocomplete="off" spellcheck="false" />
+          <input id="search" type="search" placeholder="Search project…" autocomplete="off" spellcheck="false" />
         </div>
       </div>
 
       <div id="list" class="proj-list">
         <div class="proj-list-head">
-          <span class="c-title">Titolo</span>
-          <span class="c-owner">Proprietario</span>
-          <span class="c-mod">Ultima modifica</span>
-          <span class="c-actions">Azioni</span>
+          <span class="c-title">Title</span>
+          <span class="c-owner">Owner</span>
+          <span class="c-mod">Last modified</span>
+          <span class="c-actions">Actions</span>
         </div>
         <div id="rows"></div>
       </div>
 
       <div id="empty" class="proj-empty hidden">
-        <p>Nessun progetto ancora.</p>
-        <p class="muted">Crea un <b>nuovo progetto</b> o carica un archivio <b>.zip</b> di un progetto LaTeX.</p>
+        <p>No projects yet.</p>
+        <p class="muted">Create a <b>new project</b> or upload a <b>.zip</b> archive of a LaTeX project.</p>
       </div>
       <div id="listFoot" class="list-foot"></div>
     </main>

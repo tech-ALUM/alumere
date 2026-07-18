@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -11,56 +11,56 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 <body>
   <header class="topbar">
     <div class="brand">
-      <a class="backlink" href="index.html" title="Torna ai progetti">←</a>
+      <a class="backlink" href="index.html" title="Back to projects">←</a>
       <span class="logo">∑</span>
       <span class="name">Alum<span class="thin">ère</span></span>
-      <span class="projname" id="projName">Progetto</span>
+      <span class="projname" id="projName">Project</span>
     </div>
     <div class="toolbar">
-      <button id="recompile" class="btn primary" title="Compila il PDF (Ctrl/Cmd+S)">
-        <span class="ic">▶</span> Compila
+      <button id="recompile" class="btn primary" title="Compile the PDF (Ctrl/Cmd+S)">
+        <span class="ic">▶</span> Compile
       </button>
-      <button id="download" class="btn" title="Scarica il PDF compilato">Scarica PDF</button>
-      <button id="history" class="btn" title="Cronologia versioni del progetto"><span class="ic">🕘</span> Cronologia</button>
+      <button id="download" class="btn" title="Download the compiled PDF">Download PDF</button>
+      <button id="history" class="btn" title="Project version history"><span class="ic">🕘</span> History</button>
       <div class="menu" id="settingsMenu">
-        <button id="settingsBtn" class="btn" title="Impostazioni (motore LaTeX, tema editor)" aria-haspopup="true">⚙</button>
+        <button id="settingsBtn" class="btn" title="Settings (LaTeX engine, editor theme)" aria-haspopup="true">⚙</button>
         <div class="menu-pop" hidden>
-          <label>Motore LaTeX
+          <label>LaTeX engine
             <select id="engine">
               <option value="xelatex" selected>XeLaTeX</option>
               <option value="pdflatex">pdfLaTeX</option>
               <option value="lualatex">LuaLaTeX</option>
             </select>
           </label>
-          <label>Tema editor
-            <select id="editorTheme" title="Palette colori dell'editor"></select>
+          <label>Editor theme
+            <select id="editorTheme" title="Editor colour palette"></select>
           </label>
-          <label>Aspetto
-            <select id="appTheme" title="Tema chiaro/scuro dell'interfaccia">
-              <option value="auto" selected>Auto (sistema)</option>
-              <option value="light">Chiaro</option>
-              <option value="dark">Scuro</option>
+          <label>Appearance
+            <select id="appTheme" title="Light/dark theme of the interface">
+              <option value="auto" selected>Auto (system)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
             </select>
           </label>
         </div>
       </div>
-      <div id="presence" class="presence" aria-label="Chi è online su questo progetto"></div>
-      <span id="collabState" class="status idle" title="Stato collaborazione real-time">…</span>
-      <span id="status" class="status idle">Pronto</span>
+      <div id="presence" class="presence" aria-label="Who's online in this project"></div>
+      <span id="collabState" class="status idle" title="Real-time collaboration status">…</span>
+      <span id="status" class="status idle">Ready</span>
     </div>
   </header>
 
   <main class="workspace">
     <section class="pane files" id="filesPane">
       <div class="pane-head">
-        <span>Progetto</span>
+        <span>Project</span>
         <div class="pane-actions">
-          <button id="newFile" class="mini" title="Nuovo file">＋ file</button>
-          <button id="newFolder" class="mini" title="Nuova cartella">＋ cartella</button>
+          <button id="newFile" class="mini" title="New file">＋ file</button>
+          <button id="newFolder" class="mini" title="New folder">＋ folder</button>
         </div>
       </div>
       <ul id="tree" class="tree"></ul>
-      <div class="files-hint">Clicca un file per aprirlo · passa sulla riga per rinominare o eliminare</div>
+      <div class="files-hint">Click a file to open it · hover a row to rename or delete</div>
     </section>
 
     <div class="splitter" data-target="filesPane"></div>
@@ -69,12 +69,12 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <div class="pane-head">
         <span id="openPath">main.tex</span>
         <span class="muted small" id="saveHint"
-              title="Le modifiche si salvano da sole, in tempo reale: non c'è nulla da premere.">salvataggio automatico</span>
+              title="Changes save themselves, in real time: there's nothing to press.">auto-save</span>
       </div>
       <div id="offlineBar" class="offline-bar">
         <span>⚠</span>
-        <span>Offline — in questo momento stai scrivendo solo per te.
-          Le modifiche non vanno perse: si sincronizzano da sole appena torni online.</span>
+        <span>Offline — right now you're writing just for yourself.
+          Your changes aren't lost: they sync on their own as soon as you're back online.</span>
       </div>
       <div id="editor" class="editor-host"></div>
     </section>
@@ -83,12 +83,12 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 
     <section class="pane preview" id="previewPane">
       <div class="pane-head">
-        <span>Anteprima</span>
+        <span>Preview</span>
         <div class="pane-actions">
           <div id="pdfZoomBar" class="zoombar hidden">
-            <button id="zoomOut" class="zoombtn" title="Riduci">−</button>
-            <button id="zoomReset" class="zoomlabel" title="Adatta alla larghezza"><span id="pdfZoomLabel">100%</span></button>
-            <button id="zoomIn" class="zoombtn" title="Ingrandisci">＋</button>
+            <button id="zoomOut" class="zoombtn" title="Zoom out">−</button>
+            <button id="zoomReset" class="zoomlabel" title="Fit width"><span id="pdfZoomLabel">100%</span></button>
+            <button id="zoomIn" class="zoombtn" title="Zoom in">＋</button>
           </div>
           <button id="tabPdf" class="tabbtn active">PDF</button>
           <button id="tabLog" class="tabbtn">Log</button>
@@ -104,7 +104,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
           <div id="issues" class="issues hidden"></div>
           <pre id="log" class="log"></pre>
         </div>
-        <div id="previewEmpty" class="preview-empty">Premi <b>Compila</b> per generare il PDF.</div>
+        <div id="previewEmpty" class="preview-empty">Press <b>Compile</b> to generate the PDF.</div>
       </div>
     </section>
   </main>
@@ -112,16 +112,16 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
   <!-- History (M2): full-screen overlay — timeline on the left, per-file diff of the selected version on the right. -->
   <div id="historyOverlay" class="hist-overlay" hidden aria-hidden="true">
     <header class="hist-head">
-      <div class="hist-title"><span class="ic">🕘</span> Cronologia <span class="muted" id="histProj"></span></div>
+      <div class="hist-title"><span class="ic">🕘</span> History <span class="muted" id="histProj"></span></div>
       <div class="hist-head-actions">
-        <button id="histCheckpoint" class="btn" title="Crea subito una versione con nome: un punto fermo che i salvataggi successivi non modificano">📌 Checkpoint</button>
-        <button id="histClose" class="btn" title="Chiudi la cronologia (Esc)">✕ Chiudi</button>
+        <button id="histCheckpoint" class="btn" title="Create a named version now: a fixed point that later saves won't change">📌 Checkpoint</button>
+        <button id="histClose" class="btn" title="Close the history (Esc)">✕ Close</button>
       </div>
     </header>
     <div class="hist-main">
-      <aside class="hist-list" id="histList" aria-label="Elenco versioni"></aside>
+      <aside class="hist-list" id="histList" aria-label="Version list"></aside>
       <section class="hist-detail" id="histDetail">
-        <div class="hist-placeholder">Seleziona una versione a sinistra per vederne le modifiche.</div>
+        <div class="hist-placeholder">Select a version on the left to see its changes.</div>
       </section>
     </div>
   </div>

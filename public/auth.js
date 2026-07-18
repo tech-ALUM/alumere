@@ -22,15 +22,15 @@
       body: JSON.stringify({ email }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.ok) throw new Error(d.error || "Invio non riuscito, riprova.");
+    if (!r.ok || !d.ok) throw new Error(d.error || "Couldn't send, please try again.");
     return d;
   }
-  // "Cambia utente": reopen the login overlay in dismissable mode WITHOUT logging out.
+  // "Switch user": reopen the login overlay in dismissable mode WITHOUT logging out.
   // The switch only takes effect once a new login completes (its cookie overwrites this
   // one); closing with the ✕ leaves the current session untouched.
   function switchUser() { showLoginOverlay(true); }
 
-  // Small "👤 Name · Cambia" chip in the top bar's toolbar.
+  // Small "👤 Name · Switch" chip in the top bar's toolbar.
   function renderChip() {
     const bar = document.querySelector(".topbar .toolbar");
     if (!bar || !currentUser) return;
@@ -45,14 +45,14 @@
     who.className = "user-chip-name"; who.textContent = "👤 " + currentUser.name;
     const sw = document.createElement("button");
     sw.type = "button"; sw.className = "user-chip-switch";
-    sw.textContent = "Cambia"; sw.title = "Cambia utente";
+    sw.textContent = "Switch"; sw.title = "Switch user";
     sw.addEventListener("click", switchUser);
     chip.append(who, sw);
   }
 
   const BRAND = `<div class="auth-brand"><span class="logo">∑</span><span>Alum<span class="thin">ère</span></span></div>`;
   const closeBtn = (dismissable) =>
-    dismissable ? `<button type="button" class="auth-close" aria-label="Chiudi" title="Chiudi (resti connesso)">✕</button>` : "";
+    dismissable ? `<button type="button" class="auth-close" aria-label="Close" title="Close (you stay signed in)">✕</button>` : "";
 
   function destroyOverlay(ov) {
     if (ov._poll) clearInterval(ov._poll);
@@ -69,7 +69,7 @@
     document.addEventListener("keydown", ov._onKey);
   }
 
-  // Login modal. `dismissable` adds a ✕ (used by "Cambia utente"); the first, forced
+  // Login modal. `dismissable` adds a ✕ (used by "Switch user"); the first, forced
   // login (no session yet) is not dismissable.
   function showLoginOverlay(dismissable) {
     const ov = document.createElement("div");
@@ -78,12 +78,12 @@
       <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         ${closeBtn(dismissable)}
         ${BRAND}
-        <h2 id="authTitle">Accedi</h2>
-        <p class="auth-sub">Inserisci la tua email aziendale: ti mandiamo un link per entrare. Nessuna password.</p>
+        <h2 id="authTitle">Sign in</h2>
+        <p class="auth-sub">Enter your work email: we'll send you a link to sign in. No password.</p>
         <form class="auth-form" novalidate>
-          <label>Email <input name="email" type="email" autocomplete="email" inputmode="email" required placeholder="nome.cognome@…" /></label>
+          <label>Email <input name="email" type="email" autocomplete="email" inputmode="email" required placeholder="name.surname@…" /></label>
           <div class="auth-err" hidden></div>
-          <button type="submit" class="btn primary auth-submit">Inviami il link</button>
+          <button type="submit" class="btn primary auth-submit">Send me the link</button>
         </form>
       </div>`;
     document.body.appendChild(ov);
@@ -98,7 +98,7 @@
       e.preventDefault();
       err.hidden = true;
       const email = input.value.trim();
-      if (!email) { err.textContent = "Inserisci la tua email."; err.hidden = false; return; }
+      if (!email) { err.textContent = "Enter your email."; err.hidden = false; return; }
       btn.disabled = true;
       try { await requestLink(email); showSentState(ov, email, dismissable); }
       catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
@@ -114,11 +114,11 @@
     card.innerHTML = `
       ${closeBtn(dismissable)}
       ${BRAND}
-      <h2>Controlla la posta</h2>
-      <p class="auth-sub">Ti abbiamo inviato un link di accesso a <strong class="auth-email"></strong>.
-        Aprilo <strong>da questo dispositivo</strong> per entrare — scade tra pochi minuti.</p>
-      <p class="auth-sub" style="opacity:.7">Puoi lasciare aperta questa pagina: si sblocca da sola appena accedi.</p>
-      <button type="button" class="user-chip-switch auth-back">Usa un'altra email</button>`;
+      <h2>Check your inbox</h2>
+      <p class="auth-sub">We've sent a sign-in link to <strong class="auth-email"></strong>.
+        Open it <strong>on this device</strong> to sign in — it expires in a few minutes.</p>
+      <p class="auth-sub" style="opacity:.7">You can leave this page open: it unlocks itself as soon as you sign in.</p>
+      <button type="button" class="user-chip-switch auth-back">Use a different email</button>`;
     card.querySelector(".auth-email").textContent = email;   // textContent → no HTML injection
     wireClose(ov);
     card.querySelector(".auth-back").addEventListener("click", () => {

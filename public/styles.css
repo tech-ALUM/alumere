@@ -408,7 +408,7 @@ body.dragging .pdf-scroll { pointer-events: none; }
   align-items: center; gap: 12px; padding: 10px 16px;
 }
 .proj-list-head {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  font-size: 12px; color: var(--muted);
   background: var(--panel-2); border-bottom: 1px solid var(--line);
   border-radius: 11px 11px 0 0;
 }
@@ -479,7 +479,7 @@ body.dragging .pdf-scroll { pointer-events: none; }
 
 /* ---------- tags: sidebar section, row chips, popovers ---------- */
 .side-tags { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
-.side-tags-head { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: 10px 10px 4px; }
+.side-tags-head { font-size: 11px; color: var(--muted); padding: 10px 10px 4px; }
 .tag-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: var(--tc, var(--accent)); }
 .tag-item .ti-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-item .side-count { margin-left: auto; }
