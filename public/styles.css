@@ -338,11 +338,26 @@ body.dragging .pdf-scroll { pointer-events: none; }
   opacity: .8; padding: 0 4px; border-radius: 6px;
 }
 .brand .backlink:hover { opacity: 1; background: rgba(255,255,255,.12); }
-.brand .projname {
-  font-size: 13px; color: #cddce8; margin-left: 8px; padding-left: 10px;
-  border-left: 1px solid rgba(255,255,255,.18);
-  max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+/* Project name = a click-to-open menu (rename, and room for more later). The button
+   carries the divider + hover; the inner span is the ellipsised name. */
+.projname-menu { margin-left: 8px; }
+.projname-btn {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 300px;
+  padding: 3px 8px 3px 10px; font: inherit; font-size: 13px; color: #cddce8;
+  background: transparent; border: 0; border-left: 1px solid rgba(255,255,255,.18);
+  border-radius: 0 7px 7px 0; cursor: pointer;
 }
+.projname-btn:hover { background: rgba(255,255,255,.12); }
+.projname-btn[hidden] { display: none; }   /* author display: above would otherwise beat [hidden] */
+.brand .projname {
+  max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.projname-btn .caret { font-size: 10px; opacity: .7; }
+.projname-input {
+  margin-left: 8px; width: 240px; padding: 3px 8px; font: inherit; font-size: 13px;
+  color: var(--ink); background: #fff; border: 1px solid var(--accent); border-radius: 7px;
+}
+.projname-menu .menu-pop { left: 0; right: auto; min-width: 200px; }
 
 /* ---------- Home (landing) page ---------- */
 /* Two-pane, Overleaf-style: a full-height left sidebar (primary action + nav; tags and

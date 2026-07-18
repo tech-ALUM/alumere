@@ -14,7 +14,14 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <a class="backlink" href="index.html" title="Back to projects">←</a>
       <span class="logo">∑</span>
       <span class="name">Alum<span class="thin">ère</span></span>
-      <span class="projname" id="projName">Project</span>
+      <div class="menu projname-menu" id="projMenu">
+        <button class="projname-btn" id="projNameBtn" aria-haspopup="true" title="Project name — click to rename">
+          <span class="projname" id="projName">Project</span><span class="caret">▾</span>
+        </button>
+        <div class="menu-pop" hidden>
+          <button class="menu-item" id="projRename" type="button"><span class="menu-ic">✎</span> Rename project</button>
+        </div>
+      </div>
     </div>
     <div class="toolbar">
       <button id="recompile" class="btn primary" title="Compile the PDF (Ctrl/Cmd+S)">

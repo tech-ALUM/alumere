@@ -40,6 +40,7 @@ const ICONS = {
   restore: svgIcon('<polyline points="3 5 3 11 9 11"/><path d="M5.6 16A9 9 0 1 0 6 6.2L3 9"/>'),
   trash: svgIcon('<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6"/><path d="M14 11v6"/>'),
   tag: svgIcon('<path d="M20.6 13.4l-7.2 7.2a1.8 1.8 0 0 1-2.6 0l-7-7A1.8 1.8 0 0 1 3.3 12.3V5.3A1.8 1.8 0 0 1 5 3.5h7a1.8 1.8 0 0 1 1.3.5l7.3 7.3a1.8 1.8 0 0 1 0 2.1z"/><circle cx="7.8" cy="7.8" r="1.2"/>'),
+  edit: svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
 };
 
 // Compact relative time in English ("3 months ago", "yesterday", "now"), Overleaf-style.
@@ -194,6 +195,7 @@ function rowFor(p) {
     <div class="c-owner"></div>
     <div class="c-mod"><span class="mod-when"></span><span class="mod-by"></span></div>
     <div class="c-actions">
+      <button class="row-act row-ren" data-tip="Rename" aria-label="Rename">${ICONS.edit}</button>
       <button class="row-act row-zip" data-tip="Download sources (.zip)" aria-label="Download .zip">${ICONS.download}</button>
       <button class="row-act row-pdf" data-tip="Download PDF" aria-label="Download PDF"><span class="pdf-badge">PDF</span></button>
       <button class="row-act row-arch" data-tip="${archived ? "Restore" : "Archive"}" aria-label="${archived ? "Restore" : "Archive"}">${archived ? ICONS.restore : ICONS.archive}</button>
@@ -212,6 +214,7 @@ function rowFor(p) {
   row.addEventListener("keydown", (e) => { if (e.key === "Enter") openProject(p.id); });
   const stop = (sel, fn) => { const el = row.querySelector(sel); el.addEventListener("click", (e) => { e.stopPropagation(); fn(el); }); };
   stop(".tag-add", (el) => openTagMenu(p, el));
+  stop(".row-ren", () => renameProject(p));
   stop(".row-zip", () => downloadBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`, "Preparing the zip…"));
   stop(".row-pdf", () => downloadBlob(`/api/projects/${enc(p.id)}/pdf`, `${safeFile(p.name)}.pdf`, "Compiling the PDF…"));
   stop(".row-arch", () => toggleArchive(p, !archived));
@@ -412,6 +415,22 @@ async function removeProject(p) {
   if (!confirm(`Delete "${p.name}"? This can't be undone, for anyone.`)) return;
   try { await fetch(`/api/projects/${enc(p.id)}`, { method: "DELETE" }); load(); }
   catch { setStatus("err", "Delete failed"); }
+}
+
+async function renameProject(p) {
+  const name = prompt("Rename project:", p.name || "");
+  if (name === null) return;
+  const next = name.trim();
+  if (!next || next === p.name) return;
+  setStatus("busy", "Renaming…");
+  try {
+    const res = await fetch(`/api/projects/${enc(p.id)}/rename`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: next }),
+    });
+    const data = await res.json();
+    if (data.ok) { await load(); setStatus("ok", "Renamed ✓"); }
+    else setStatus("err", data.error || "Rename failed");
+  } catch { setStatus("err", "Rename failed"); }
 }
 
 // ---------- create / upload project ----------

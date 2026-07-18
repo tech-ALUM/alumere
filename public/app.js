@@ -1334,6 +1334,79 @@ async function checkpointNow() {
   }
 }
 
+// ---------- Project name (rename) ----------
+// The name is authoritative in meta.json (via POST …/rename) and mirrored into the shared
+// meta map so a rename shows up live for everyone who has the project open right now.
+function setProjName(name) {
+  const el = $("projName");
+  if (el) el.textContent = name;
+  document.title = (name || "Project") + " — Alumère";
+}
+function closeProjMenu() {
+  const menu = $("projMenu"), pop = menu && menu.querySelector(".menu-pop");
+  if (pop) pop.hidden = true;
+}
+async function commitProjRename(next) {
+  const prev = ($("projName").textContent || "").trim();
+  if (!next || next === prev) return;
+  setProjName(next);                                   // optimistic
+  try {
+    const r = await fetch(`/api/projects/${PROJECT_ID}/rename`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: next }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    setProjName(d.name);
+    try { metaMap.set("name", d.name); } catch {}      // live-mirror to peers
+  } catch (e) {
+    setProjName(prev);                                 // revert on failure
+    alert("Couldn't rename the project: " + e.message);
+  }
+}
+// Click "Rename" → the name becomes an inline input (Enter/blur = save, Esc = cancel).
+let projRenaming = false;
+function startProjRename() {
+  if (projRenaming) return;
+  projRenaming = true;
+  closeProjMenu();
+  const menu = $("projMenu"), btn = $("projNameBtn");
+  const cur = ($("projName").textContent || "").trim();
+  const input = document.createElement("input");
+  input.className = "projname-input";
+  input.value = cur; input.maxLength = 120; input.setAttribute("aria-label", "Project name");
+  btn.hidden = true;
+  menu.insertBefore(input, menu.firstChild);
+  input.focus(); input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return; done = true;                     // Enter removes the input → blur; guard the double
+    const next = input.value.trim().slice(0, 120);
+    input.remove(); btn.hidden = false; projRenaming = false;
+    if (commit) commitProjRename(next);
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+function setupProjMenu() {
+  const menu = $("projMenu"); if (!menu) return;
+  const btn = $("projNameBtn"), pop = menu.querySelector(".menu-pop"), ren = $("projRename");
+  if (!btn || !pop) return;
+  btn.addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !menu.contains(e.target)) pop.hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) pop.hidden = true; });
+  if (ren) ren.addEventListener("click", (e) => { e.stopPropagation(); startProjRename(); });
+}
+// A peer renamed the project (mirrored into the shared meta map) → follow it live.
+function onMetaChanged(e) {
+  if (e.keysChanged && e.keysChanged.has("name")) {
+    const n = metaMap.get("name");
+    if (typeof n === "string" && n && n !== ($("projName").textContent || "").trim()) setProjName(n);
+  }
+}
+
 // ---------- Load + wire up ----------
 async function init() {
   // Don't touch anything until the user is identified (auth.js sets the session cookie).
@@ -1344,8 +1417,7 @@ async function init() {
   let meta;
   try { const d = await (await fetch(`/api/projects/${PROJECT_ID}`)).json(); if (!d.ok) throw 0; meta = d.project; }
   catch { document.body.innerHTML = errorScreen("Project not found or server unreachable."); return; }
-  $("projName").textContent = meta.name || "Project";
-  document.title = (meta.name || "Project") + " — Alumère";
+  setProjName(meta.name || "Project");
   initEditorTheme();
 
   if (!window.YCOLLAB) {
@@ -1369,6 +1441,7 @@ async function init() {
   provider.awareness.setLocalStateField("user", { id: me.id, name: me.name, color, colorLight });
 
   filesMap.observe(onFilesChanged);
+  metaMap.observe(onMetaChanged);
   noteNotSynced();
   // "connected" is the socket, not the doc — only `synced` means we actually have everyone's
   // work, so that's what flips us to online (see onSynced).
@@ -1378,7 +1451,7 @@ async function init() {
   provider.awareness.on("change", onAwarenessChange);
 
   // Toolbar + layout (independent of sync).
-  renderTree(); applyLayout(); setupSplitters();
+  renderTree(); applyLayout(); setupSplitters(); setupProjMenu();
   $("recompile").addEventListener("click", compile);
   $("newFile").addEventListener("click", newFile);
   $("newFolder").addEventListener("click", newFolder);

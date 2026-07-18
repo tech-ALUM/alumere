@@ -643,6 +643,24 @@ app.put("/api/projects/:id", requireUser, async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Rename a project (display name only). The id/folder stays immutable — only the
+// label changes. Dedicated endpoint on purpose: PUT /api/projects/:id rewrites files/
+// (rm -rf), so a name-only PUT would wipe the project. Doesn't bump updatedAt: renaming
+// isn't a content change (same posture as archive/tags).
+app.post("/api/projects/:id/rename", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  const name = String((req.body || {}).name || "").trim().slice(0, 120);
+  if (!name) return res.status(400).json({ ok: false, error: "empty name" });
+  try {
+    meta.name = name;
+    await writeMeta(id, meta);
+    res.json({ ok: true, name });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.delete("/api/projects/:id", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
