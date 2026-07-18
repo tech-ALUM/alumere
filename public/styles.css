@@ -296,7 +296,10 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 .cm-editor .cm-scroller { font-family: var(--mono); line-height: 1.55; }
 .cm-focused { outline: none !important; }
 .cm-gutters { background: #f7f9fc !important; border-right: 1px solid var(--line) !important; color: #aab6c2 !important; }
-.cm-activeLine { background: #eef5fb !important; }
+/* Translucent on purpose: CM6 paints the text selection on a layer BEHIND the line
+   backgrounds, so an opaque active-line would hide the selection exactly where you're
+   selecting (the active line). A tint lets the selection show through. */
+.cm-activeLine { background: rgba(126, 176, 213, .14) !important; }
 .cm-activeLineGutter { background: #e3eef8 !important; }
 .cm-tooltip-autocomplete { font-family: var(--mono) !important; font-size: 12.5px; border-radius: 8px !important; border: 1px solid var(--line) !important; box-shadow: 0 8px 28px rgba(0,0,0,.14) !important; }
 .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: var(--accent-ink) !important; }
@@ -653,7 +656,9 @@ body.dragging .pdf-scroll { pointer-events: none; }
 :root{
   --ed-bg:#ffffff; --ed-fg:#243240;
   --ed-gutter-bg:#f7f9fc; --ed-gutter-fg:#aab6c2;
-  --ed-active-line:#eef5fb; --ed-active-gutter:#e3eef8;
+  /* --ed-active-line MUST stay translucent (rgba): the selection layer sits behind the
+     line background, so an opaque value would mask the selection on the active line. */
+  --ed-active-line:rgba(126,176,213,.14); --ed-active-gutter:#e3eef8;
   --ed-selection:#cfe6f7; --ed-cursor:#5f9bc9;
   --ed-tok-command:#2f7d4f; --ed-tok-comment:#8a94a0; --ed-tok-string:#b9650f;
   --ed-tok-number:#7a3ea8; --ed-tok-math:#1f6feb; --ed-tok-bracket:#8a94a0; --ed-tok-meta:#6b7785;
@@ -661,7 +666,7 @@ body.dragging .pdf-scroll { pointer-events: none; }
 body[data-editor-theme="light"]{
   --ed-bg:#ffffff; --ed-fg:#243240;
   --ed-gutter-bg:#f7f9fc; --ed-gutter-fg:#aab6c2;
-  --ed-active-line:#eef5fb; --ed-active-gutter:#e3eef8;
+  --ed-active-line:rgba(126,176,213,.14); --ed-active-gutter:#e3eef8;
   --ed-selection:#cfe6f7; --ed-cursor:#5f9bc9;
   --ed-tok-command:#2f7d4f; --ed-tok-comment:#8a94a0; --ed-tok-string:#b9650f;
   --ed-tok-number:#7a3ea8; --ed-tok-math:#1f6feb; --ed-tok-bracket:#8a94a0; --ed-tok-meta:#6b7785;
@@ -669,7 +674,7 @@ body[data-editor-theme="light"]{
 body[data-editor-theme="dark"]{
   --ed-bg:#0f1722; --ed-fg:#d7e0ea;
   --ed-gutter-bg:#0c131c; --ed-gutter-fg:#5a6b7d;
-  --ed-active-line:#16202c; --ed-active-gutter:#1b2735;
+  --ed-active-line:rgba(215,224,234,.05); --ed-active-gutter:#1b2735;
   --ed-selection:#2c4a63; --ed-cursor:#7eb0d5;
   --ed-tok-command:#7ee0a8; --ed-tok-comment:#6a7889; --ed-tok-string:#f0a868;
   --ed-tok-number:#c79bf0; --ed-tok-math:#6fb3ff; --ed-tok-bracket:#8aa0b4; --ed-tok-meta:#8aa0b4;
@@ -677,7 +682,7 @@ body[data-editor-theme="dark"]{
 body[data-editor-theme="solarized"]{
   --ed-bg:#fdf6e3; --ed-fg:#586e75;
   --ed-gutter-bg:#f2ead0; --ed-gutter-fg:#93a1a1;
-  --ed-active-line:#f5edd6; --ed-active-gutter:#eee5c9;
+  --ed-active-line:rgba(88,110,117,.06); --ed-active-gutter:#eee5c9;
   --ed-selection:#e3dcc0; --ed-cursor:#b58900;
   --ed-tok-command:#859900; --ed-tok-comment:#93a1a1; --ed-tok-string:#2aa198;
   --ed-tok-number:#d33682; --ed-tok-math:#268bd2; --ed-tok-bracket:#93a1a1; --ed-tok-meta:#657b83;
@@ -685,7 +690,7 @@ body[data-editor-theme="solarized"]{
 body[data-editor-theme="nord"]{
   --ed-bg:#2e3440; --ed-fg:#d8dee9;
   --ed-gutter-bg:#2b313c; --ed-gutter-fg:#4c566a;
-  --ed-active-line:#353c4a; --ed-active-gutter:#3b4252;
+  --ed-active-line:rgba(216,222,233,.05); --ed-active-gutter:#3b4252;
   --ed-selection:#434c5e; --ed-cursor:#88c0d0;
   --ed-tok-command:#a3be8c; --ed-tok-comment:#616e88; --ed-tok-string:#ebcb8b;
   --ed-tok-number:#b48ead; --ed-tok-math:#81a1c1; --ed-tok-bracket:#7b8392; --ed-tok-meta:#8893a3;
@@ -849,3 +854,66 @@ body[data-editor-theme="nord"]{
   .hist-list { max-height: 34vh; }
   .hist-detail-body { grid-template-columns: 1fr; }
 }
+
+/* ---------- Comments (giro 4): anchored threads + @mentions ---------- */
+/* The in-text highlight. Warm amber, translucent so the syntax colours stay readable
+   underneath — the same values hold up in light and dark themes. */
+.cm-comment-hl { background: rgba(255, 193, 61, .26); border-bottom: 1.5px solid rgba(230, 156, 20, .75); cursor: pointer; }
+
+/* Floating "add comment" button next to the selection. */
+.comment-fab {
+  position: fixed; z-index: 69; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent-d);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .22);
+}
+/* `display: grid` above beats the UA rule `[hidden]{display:none}` (author CSS wins), so
+   hiding via the hidden attribute needs this explicit override — same trap as
+   .projname-btn and .editor-empty, third time it bites this project. */
+.comment-fab[hidden] { display: none; }
+.comment-fab:hover { background: var(--accent-d); }
+
+/* Popover shared by the composer and the thread view. */
+.comment-pop {
+  position: fixed; z-index: 70; width: 340px; max-height: min(60vh, 480px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22); padding: 10px; font-size: 13px;
+}
+.comment-quote {
+  font: 12px/1.4 var(--mono); color: var(--muted); background: var(--panel-2);
+  border-left: 3px solid var(--accent); border-radius: 4px; padding: 5px 8px; margin-bottom: 8px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.comment-input {
+  width: 100%; box-sizing: border-box; resize: vertical; font: 13px/1.45 'Inter', sans-serif;
+  color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+}
+.comment-input:focus { outline: none; border-color: var(--accent-d); }
+.comment-btnrow { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+/* One thread inside the popover (several can stack when highlights overlap). */
+.comment-thread { padding: 4px 0 10px; }
+.comment-thread + .comment-thread { border-top: 1px solid var(--line); padding-top: 10px; }
+.comment-thread-head { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 4px; }
+.comment-msg { display: flex; gap: 8px; margin: 8px 0; }
+.comment-msg-body { min-width: 0; flex: 1; }
+.comment-msg-head { margin-bottom: 2px; }
+.comment-msg-text { white-space: pre-wrap; word-break: break-word; }
+.comment-replyrow { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
+.comment-replyrow .mention-wrap { flex: 1; }
+.comment-replybtn { flex: 0 0 auto; }
+
+/* @mention bits: the dropdown under the textarea and the pill inside message text. */
+.mention-wrap { position: relative; }
+.mention-menu {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 71; margin-top: 2px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .18); overflow: hidden;
+}
+.mention-item {
+  display: block; width: 100%; text-align: left; padding: 6px 10px; cursor: pointer;
+  background: none; border: 0; font: 13px/1.4 'Inter', sans-serif; color: var(--ink);
+}
+.mention-item .muted { font-size: 11.5px; }
+.mention-item:hover, .mention-item.sel { background: var(--accent-soft); }
+.mention { color: var(--accent-d); font-weight: 600; }

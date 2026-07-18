@@ -1,7 +1,7 @@
 // Entry bundled by esbuild into public/vendor/codemirror.js (window.CM6 + window.YCOLLAB).
 // Rebuild:  npm run build:client        (see build/build-client.mjs)
-import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap, Decoration, WidgetType, ViewPlugin } from "@codemirror/view";
+import { EditorState, StateField, StateEffect, RangeSet, RangeSetBuilder, Transaction } from "@codemirror/state";
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentOnInput } from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
@@ -18,8 +18,8 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 
 window.CM6 = {
-  view: { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap },
-  state: { EditorState },
+  view: { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap, Decoration, WidgetType, ViewPlugin },
+  state: { EditorState, StateField, StateEffect, RangeSet, RangeSetBuilder, Transaction },
   commands: { history, historyKeymap, defaultKeymap, indentWithTab },
   language: { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentOnInput },
   legacy: { stex },

@@ -507,6 +507,28 @@ async function historyGcSweep() {
   if (versions || blobs) console.log(`[alumere] history gc: pruned ${versions} versions, ${blobs} orphan blobs`);
 }
 
+// ---------- users roster (D2: populated at login) ----------
+// PROJECTS_DIR/users.json ([{ id, name, lastLoginAt }]) — everyone who has ever signed in.
+// It feeds the @mention autocomplete in comments (and is the natural base for per-person
+// ACLs later). Upserted on each confirmed login, so it needs no migration or backfill.
+const USERS_FILE = path.join(PROJECTS_DIR, "users.json");
+let usersChain = Promise.resolve();                                 // serialize users.json read-modify-write
+const withUsersLock = (fn) => { const r = usersChain.then(fn, fn); usersChain = r.catch(() => {}); return r; };
+async function readUsers() {
+  try { const j = JSON.parse(await readFile(USERS_FILE, "utf8")); return Array.isArray(j.users) ? j.users : []; }
+  catch { return []; }
+}
+async function recordLogin(user) {
+  await withUsersLock(async () => {
+    const users = await readUsers();
+    const u = users.find((x) => x.id === user.id);
+    if (u) { u.name = user.name; u.lastLoginAt = new Date().toISOString(); }
+    else users.push({ id: user.id, name: user.name, lastLoginAt: new Date().toISOString() });
+    await mkdir(PROJECTS_DIR, { recursive: true });
+    await writeFile(USERS_FILE, JSON.stringify({ users }, null, 2), "utf8");
+  });
+}
+
 // ---------- session endpoints ----------
 app.get("/api/session", (req, res) => res.json({ ok: true, user: req.user || null }));
 
@@ -590,6 +612,7 @@ app.post("/api/auth/verify", (req, res) => {
   if (!pend || pend.exp <= Date.now()) return res.status(400).type("html").send(invalidLinkPage());
   pendingLogins.delete(token);                             // single-use
   persistPending();
+  recordLogin(pend.user).catch((e) => console.warn(`[alumere][auth] users.json update failed: ${e.message}`));
   res.cookie(COOKIE_NAME, signSession(pend.user), {
     httpOnly: true, sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_MS, secure: COOKIE_SECURE,
   });
@@ -599,6 +622,15 @@ app.post("/api/auth/verify", (req, res) => {
 app.post("/api/session/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME, { path: "/" });
   res.json({ ok: true });
+});
+
+// The roster for @mentions: everyone who has ever signed in (see recordLogin).
+app.get("/api/users", requireUser, async (_req, res) => {
+  try {
+    const users = (await readUsers()).map((u) => ({ id: u.id, name: u.name }));
+    users.sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ ok: true, users });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ---------- project endpoints ----------
@@ -989,6 +1021,64 @@ app.post("/api/projects/:id/history/:vid/label", requireUser, async (req, res) =
   res.json({ ok: true, label });
 });
 
+// ---------- comment mentions → email ----------
+// A comment's live sync rides the Yjs doc (see attachCollab); the ONE thing the client
+// can't do itself is email the mentioned person, so this endpoint does exactly that and
+// nothing else. Recipients must exist in users.json (you can only mention people who have
+// actually signed in), so this can't be turned into an arbitrary-address mail cannon; a
+// per-sender rate cap backstops the volume. SMTP off (dev) → the mail is logged instead.
+app.post("/api/projects/:id/mentions", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  if (!rateHit(emailHits, "mention:" + req.user.id, 30, 10 * 60 * 1000)) {
+    return res.status(429).json({ ok: false, error: "Too many mentions, try again in a few minutes." });
+  }
+  const body = req.body || {};
+  const text = String(body.text || "").trim().slice(0, 2000);
+  const snippet = String(body.snippet || "").trim().slice(0, 300);
+  const filePath = String(body.path || "").slice(0, 300);
+  const roster = new Map((await readUsers()).map((u) => [u.id, u]));
+  const wanted = Array.isArray(body.to) ? body.to.map((x) => String(x).toLowerCase()) : [];
+  const to = [...new Set(wanted)].map((x) => roster.get(x)).filter(Boolean)
+    .filter((u) => u.id !== req.user.id);                  // no self-notifications
+  if (!to.length) return res.json({ ok: true, sent: 0 }); // nothing to do (or unknown ids: silently dropped)
+  const base = PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+  const link = `${base}/editor.html?p=${encodeURIComponent(id)}`;
+  const t = await mailTransport();
+  let sent = 0;
+  for (const u of to) {
+    if (!t) {                                              // dev: no SMTP → log instead of mailing
+      console.log(`[alumere][mention] (SMTP off) would mail ${u.id}: ${req.user.name} mentioned them in "${meta.name}" (${filePath}): ${text}`);
+      sent++; continue;
+    }
+    try {
+      await t.sendMail({
+        from: SMTP_FROM, to: u.id,
+        subject: `${req.user.name} mentioned you in a comment — ${meta.name}`,
+        text:
+          `${req.user.name} mentioned you in a comment on "${meta.name}"` +
+          (filePath ? ` (${filePath})` : "") + ".\n\n" +
+          (snippet ? `On: "${snippet}"\n` : "") +
+          `Comment: ${text}\n\n` +
+          `Open the project: <${link}>\n`,
+        html:
+          `<div style="font-family:${AUTH_FONT};font-size:15px;line-height:1.5;color:#243240">` +
+          `<p><b>${escapeHtml(req.user.name)}</b> mentioned you in a comment on ` +
+          `<b>${escapeHtml(meta.name)}</b>${filePath ? ` <span style="color:#6b7785">(${escapeHtml(filePath)})</span>` : ""}.</p>` +
+          (snippet ? `<blockquote style="margin:0 0 .75rem;padding:.5rem .75rem;border-left:3px solid #7eb0d5;color:#6b7785">${escapeHtml(snippet)}</blockquote>` : "") +
+          `<p style="white-space:pre-wrap">${escapeHtml(text)}</p>` +
+          `<p><a href="${escapeHtml(link)}" style="display:inline-block;padding:.6rem 1.4rem;background:#7eb0d5;` +
+          `color:#103049;font-weight:600;text-decoration:none;border-radius:8px">Open the project</a></p>` +
+          `</div>`,
+      });
+      sent++;
+    } catch (e) { console.warn(`[alumere][mention] mail to ${u.id} failed: ${e.message}`); }
+  }
+  res.json({ ok: true, sent });
+});
+
 // ---------- compile (compiles the files sent inline; stateless temp dir) ----------
 function runLatexmk(cwd, mainFile, engineFlag) {
   return new Promise((resolve) => {
@@ -1070,6 +1160,16 @@ async function seedSample() {
 const COLLAB_PATH = process.env.COLLAB_PATH || "/collab";
 const COLLAB_FILES_KEY = "files";
 const COLLAB_META_KEY = "meta";
+// Comments (giro 4) live in the SAME Yjs doc (map "comments": threadId -> plain thread
+// object), so they sync live with zero extra plumbing. They persist next to meta.json —
+// comments.json, OUTSIDE files/ (writeFiles rm -rf's files/, and a comment is not a
+// source file: it must not enter compiles, zips or history versions).
+const COLLAB_COMMENTS_KEY = "comments";
+const commentsPath = (id) => path.join(projectDir(id), "comments.json");
+async function readComments(id) {
+  try { const j = JSON.parse(await readFile(commentsPath(id), "utf8")); return j && typeof j.threads === "object" ? j.threads : {}; }
+  catch { return {}; }
+}
 
 async function attachCollab(httpServer) {
   let serverMod, WebSocketServer, Y;
@@ -1102,6 +1202,13 @@ async function attachCollab(httpServer) {
         }
       }
     });
+    // Comments ride the same doc: seed the shared map from comments.json (once, with
+    // the same "already populated" posture as files).
+    const commentsMap = document.getMap(COLLAB_COMMENTS_KEY);
+    if (commentsMap.size === 0) {
+      const threads = await readComments(documentName);
+      document.transact(() => { for (const [tid, th] of Object.entries(threads)) commentsMap.set(tid, th); });
+    }
     console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
     // History: capture the on-disk starting point the first time this project is opened.
     await ensureBaseline(documentName, files, meta.createdBy || SYSTEM_USER)
@@ -1124,6 +1231,17 @@ async function attachCollab(httpServer) {
     }
     if (!files.length) { console.warn(`[alumere] collab store skipped for "${documentName}" (doc empty)`); return; }
     await writeFiles(documentName, files);
+    // Persist comments alongside (same debounced boundary). Written only when they actually
+    // changed, so ordinary text-editing stores don't rewrite the file every few seconds.
+    try {
+      const threads = {};
+      for (const [tid, th] of document.getMap(COLLAB_COMMENTS_KEY).entries()) {
+        if (th && typeof th === "object") threads[tid] = th;
+      }
+      const next = JSON.stringify({ threads }, null, 2);
+      const cur = await readFile(commentsPath(documentName), "utf8").catch(() => null);
+      if (cur !== next) await writeFile(commentsPath(documentName), next, "utf8");
+    } catch (e) { console.warn(`[alumere] comments store failed for "${documentName}": ${e.message}`); }
     // History: this same debounced save is our version boundary. A restore or explicit
     // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
     // version; we remember the last nonce we acted on in meta.json, so the flag needs no

@@ -17,6 +17,15 @@ services:
     environment:
       - PORT=3000
       - PROJECTS_DIR=/app/data/projects
+      # SMTP opzionale per provare le email VERE (magic-link e @menzioni) anche in dev:
+      # metti le credenziali in un file `.env` accanto a questo compose (è git-ignorato,
+      # bastano le righe SMTP_*) e riavvia. Senza `.env` restano vuote = SMTP spento,
+      # le mail finiscono nel log come sempre.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
     volumes:
       # 1) Monta il codice del progetto -> le modifiche si vedono subito.
       - .:/app

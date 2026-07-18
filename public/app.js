@@ -76,7 +76,7 @@ const COMMANDS = [
 const GREEK = ["alpha", "beta", "gamma", "delta", "epsilon", "theta", "lambda", "mu", "pi", "sigma", "phi", "omega", "Delta", "Gamma", "Sigma", "Omega"];
 
 // ---------- Collaboration state (Yjs + Hocuspocus) ----------
-let ydoc = null, provider = null, filesMap = null, metaMap = null;
+let ydoc = null, provider = null, filesMap = null, metaMap = null, commentsMap = null;
 let Y = null, HocuspocusProvider = null, yCollab = null, yUndoManagerKeymap = null;
 let me = { id: "anon", name: "Anonimo" };
 let booted = false;   // becomes true after the first successful sync (bootstrap once)
@@ -356,6 +356,7 @@ function onFilesChanged() {
     if (next) { openFile(next); return; }       // openFile re-renders tabs + persists
     currentPath = null;
     if (view) { view.destroy(); view = null; }
+    closeCommentOverlays();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
   }
   renderTabs();
@@ -465,6 +466,7 @@ function closeTab(path) {
     if (next) { openFile(next); return; }                  // openFile re-renders tabs + persists
     currentPath = null;
     if (view) { view.destroy(); view = null; }
+    closeCommentOverlays();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
     renderTree();
   }
@@ -482,6 +484,7 @@ function openFile(path) {
   if (!openTabs.includes(path)) openTabs.push(path);
   updateEditorEmpty();               // un-hide the host before CM measures it
   if (view) { view.destroy(); view = null; }
+  closeCommentOverlays();            // overlays are anchored to the old view's coordinates
   const { EditorView, keymap } = CM.view;
   const { EditorState } = CM.state;
   let state;
@@ -496,6 +499,7 @@ function openFile(path) {
         ...baseExtensions(),
         yCollab(val, provider.awareness, { undoManager }),
         keymap.of(yUndoManagerKeymap),
+        ...commentExtensions(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some((tr) => tr.isUserEvent("input") || tr.isUserEvent("delete"))) noteLocalEdit();
         }),
@@ -503,6 +507,8 @@ function openFile(path) {
     });
   }
   view = new EditorView({ state, parent: editorHost });
+  refreshCommentDecos();             // paint this file's comment highlights (no-op on binary)
+  view.scrollDOM.addEventListener("scroll", repositionOverlays, { passive: true });
   try { provider.awareness.setLocalStateField("activeFile", path); } catch {}
   renderTree();
   renderTabs();
@@ -1029,6 +1035,441 @@ function onPdfDblClick(e) {
     (e.clientY - rect.top) / rect.height * vp.height, inProject);
   if (!hit) return;
   gotoIssue(syncTex.pathOf.get(hit.tag), hit.line);
+}
+
+// ---------- Comments (giro 4): Word-style anchored threads + @mentions ----------
+// A thread lives in the shared Y.Map("comments") as a PLAIN object — replacing the whole
+// value on change is coarse, but it syncs live to every peer with zero new plumbing and
+// survives on disk as comments.json (see server hooks). Anchoring is D1: best-effort
+// { from, to, snippet } — Yjs relative positions don't survive the doc being rebuilt from
+// disk, so instead the client that EDITS keeps anchors fresh (debounced write-back of the
+// positions CodeMirror has already mapped), and on open the snippet re-locates the range
+// if offsets went stale. A comment whose text was deleted simply loses its highlight
+// (the thread itself survives; the review panel of giro 5 will list those too).
+// Thread: { id, path, anchor:{from,to,snippet}, resolved, createdAt,
+//           messages:[{ id, by:{id,name}, at, text, mentions:[emailId] }] }
+let roster = [];                         // [{id,name}] — everyone who has ever signed in (D2)
+let rosterById = new Map();
+let commentField = null, setCommentsEffect = null;   // CM6 pieces, built once CM is loaded
+let commentDom = null;                   // { fab, pop } floating elements (lazy singleton)
+let overlayState = null;                 // { kind:"composer"|"threads", pos, sel?, ids? }
+let commentWriteTimer = null;
+
+const newCommentId = () => "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+function commentsSupported() { return !!(CM && CM.state && CM.state.StateField && CM.view.Decoration); }
+
+// Build the CM6 StateField once: decorations live-map through every edit (local AND
+// remote — yCollab feeds remote changes through the same transaction pipeline), and a
+// setCommentsEffect rebuilds them from the stored anchors.
+function ensureCommentField() {
+  if (commentField || !commentsSupported()) return;
+  const { StateField, StateEffect } = CM.state;
+  const { EditorView, Decoration } = CM.view;
+  setCommentsEffect = StateEffect.define();
+  const build = (ranges) => Decoration.set(
+    ranges.filter((r) => r.from < r.to)
+      .map((r) => Decoration.mark({ class: "cm-comment-hl", threadId: r.id }).range(r.from, r.to)),
+    true);
+  commentField = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      deco = deco.map(tr.changes);
+      for (const e of tr.effects) if (e.is(setCommentsEffect)) deco = build(e.value);
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+// Anchor → concrete range in the CURRENT text. Exact offsets first; if the text moved
+// underneath (edits from a session that didn't write back), find the snippet again,
+// preferring the occurrence closest to where the comment used to sit.
+function resolveAnchor(text, a) {
+  if (!a || typeof a.from !== "number" || typeof a.to !== "number") return null;
+  const snip = a.snippet || "";
+  if (!snip) return null;
+  if (text.slice(a.from, a.to) === snip) return { from: a.from, to: a.to };
+  let best = -1, bestD = Infinity;
+  for (let i = text.indexOf(snip); i >= 0; i = text.indexOf(snip, i + 1)) {
+    const d = Math.abs(i - a.from);
+    if (d < bestD) { best = i; bestD = d; }
+    if (i > a.from && d > bestD) break;              // occurrences only get farther from here
+  }
+  return best < 0 ? null : { from: best, to: best + snip.length };
+}
+
+function buildCommentRanges() {
+  if (!view || !currentPath || !commentsMap) return [];
+  const text = view.state.doc.toString();
+  const out = [];
+  for (const [tid, th] of commentsMap.entries()) {
+    if (!th || th.path !== currentPath || th.resolved) continue;
+    const r = resolveAnchor(text, th.anchor);
+    if (r) out.push({ id: tid, from: r.from, to: r.to });
+  }
+  return out;
+}
+
+function refreshCommentDecos() {
+  if (!view || !commentField) return;
+  if (view.state.field(commentField, false) === undefined) return;   // binary/read-only view
+  view.dispatch({ effects: setCommentsEffect.of(buildCommentRanges()) });
+}
+
+// Threads whose live-mapped range currently touches `pos` (click target).
+function threadIdsAtPos(pos) {
+  const ids = [];
+  const f = view && commentField && view.state.field(commentField, false);
+  if (!f) return ids;
+  f.between(pos, pos, (from, to, val) => { if (val.spec.threadId) ids.push(val.spec.threadId); });
+  return ids;
+}
+
+// D1 write-back: after MY edits settle, store the positions CodeMirror mapped for me.
+// Only the editing client does this (remote peers just re-map locally), and only when
+// something actually moved — so no ping-pong between idle viewers.
+function scheduleCommentWriteBack() {
+  clearTimeout(commentWriteTimer);
+  commentWriteTimer = setTimeout(writeBackCommentAnchors, 2000);
+}
+function writeBackCommentAnchors() {
+  if (!view || !currentPath || !commentsMap || !commentField) return;
+  const f = view.state.field(commentField, false);
+  if (!f) return;
+  const live = new Map();
+  f.between(0, view.state.doc.length, (from, to, val) => { if (val.spec.threadId) live.set(val.spec.threadId, { from, to }); });
+  const updates = [];
+  for (const [tid, r] of live) {
+    const th = commentsMap.get(tid);
+    if (!th || th.path !== currentPath || r.from >= r.to) continue;   // collapsed → keep the old anchor (orphan)
+    const snippet = view.state.sliceDoc(r.from, r.to);
+    const a = th.anchor || {};
+    if (a.from === r.from && a.to === r.to && a.snippet === snippet) continue;
+    updates.push([tid, { ...th, anchor: { from: r.from, to: r.to, snippet } }]);
+  }
+  if (updates.length) ydoc.transact(() => { for (const [tid, th] of updates) commentsMap.set(tid, th); });
+}
+
+// ---- floating UI: fab (add-comment button), composer, thread popover ----
+function ensureCommentDom() {
+  if (commentDom) return commentDom;
+  const fab = document.createElement("button");
+  fab.type = "button"; fab.className = "comment-fab"; fab.hidden = true;
+  fab.title = "Comment on the selection";
+  fab.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 10a2 2 0 0 1-2 2H6l-3.5 3V4a2 2 0 0 1 2-2H12a2 2 0 0 1 2 2z"/></svg>`;
+  fab.addEventListener("mousedown", (e) => e.preventDefault());      // keep the editor selection
+  fab.addEventListener("click", openComposer);
+  const pop = document.createElement("div");
+  pop.className = "comment-pop"; pop.hidden = true;
+  document.body.append(fab, pop);
+  // Click-away closes (the pop and the fab are outside the editor DOM).
+  document.addEventListener("mousedown", (e) => {
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== fab) closeCommentOverlays();
+  });
+  commentDom = { fab, pop };
+  return commentDom;
+}
+
+function placeOverlay(el, pos) {
+  if (!view) return;
+  const c = view.coordsAtPos(Math.max(0, Math.min(pos, view.state.doc.length)));
+  const host = editorHost.getBoundingClientRect();
+  if (!c || c.bottom < host.top || c.top > host.bottom) { el.style.visibility = "hidden"; return; }
+  el.style.visibility = "visible";
+  const w = el.offsetWidth || 320, h = el.offsetHeight || 0;
+  const left = Math.max(host.left + 8, Math.min(c.left, host.right - w - 8));
+  let top = c.bottom + 8;
+  if (top + h > innerHeight - 8) top = Math.max(8, c.top - h - 8);
+  el.style.left = left + "px"; el.style.top = top + "px";
+}
+
+function updateCommentFab() {
+  const dom = ensureCommentDom();
+  if (!view || !currentPath || !commentField || view.state.field(commentField, false) === undefined
+      || (overlayState && overlayState.kind === "composer")) { dom.fab.hidden = true; return; }
+  const sel = view.state.selection.main;
+  // No selection, or the editor lost focus (clicked into another pane): the affordance
+  // would just linger over the text — Tommy's complaint from the field test.
+  if (sel.empty || !view.hasFocus) { dom.fab.hidden = true; return; }
+  const c = view.coordsAtPos(sel.head);
+  const host = editorHost.getBoundingClientRect();
+  if (!c || c.bottom < host.top || c.top > host.bottom) { dom.fab.hidden = true; return; }
+  dom.fab.hidden = false;
+  dom.fab.style.left = Math.min(c.right + 8, host.right - 36) + "px";
+  dom.fab.style.top = (c.top - 4) + "px";
+}
+
+function repositionOverlays() {
+  if (overlayState && commentDom && !commentDom.pop.hidden) placeOverlay(commentDom.pop, overlayState.pos);
+  updateCommentFab();
+}
+
+function closeCommentOverlays() {
+  if (commentDom) { commentDom.pop.hidden = true; commentDom.pop.innerHTML = ""; }
+  overlayState = null;
+  updateCommentFab();
+}
+
+// ---- @mention autocomplete over a textarea. Returns { wrap, textarea, mentions() }:
+// typing "@" filters the roster in a dropdown; picking inserts "@Name" and records the id.
+// On submit, only ids whose "@Name" still appears in the text count as mentions.
+function mentionArea(placeholder) {
+  const wrap = document.createElement("div");
+  wrap.className = "mention-wrap";
+  const ta = document.createElement("textarea");
+  ta.className = "comment-input"; ta.rows = 2; ta.placeholder = placeholder;
+  ta.maxLength = 2000;
+  const menu = document.createElement("div");
+  menu.className = "mention-menu"; menu.hidden = true;
+  wrap.append(ta, menu);
+  const picked = new Map();                    // name → id
+  let items = [], sel = 0;
+  const close = () => { menu.hidden = true; items = []; };
+  const query = () => {
+    const upto = ta.value.slice(0, ta.selectionStart);
+    const m = upto.match(/@([\p{L}\p{N}._-]*)$/u);
+    return m ? { text: m[1], start: upto.length - m[0].length } : null;
+  };
+  const renderMenu = (q) => {
+    const needle = q.text.toLowerCase();
+    items = roster.filter((u) => u.id !== me.id
+      && (u.name.toLowerCase().includes(needle) || u.id.includes(needle))).slice(0, 6);
+    if (!items.length) { close(); return; }
+    sel = Math.min(sel, items.length - 1);
+    menu.innerHTML = "";
+    items.forEach((u, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "mention-item" + (i === sel ? " sel" : "");
+      b.innerHTML = `<b>${escapeHtml(u.name)}</b> <span class="muted">${escapeHtml(u.id)}</span>`;
+      b.addEventListener("mousedown", (e) => { e.preventDefault(); pick(i, q); });
+      menu.appendChild(b);
+    });
+    menu.hidden = false;
+  };
+  const pick = (i, q) => {
+    const u = items[i]; if (!u) return;
+    picked.set(u.name, u.id);
+    const before = ta.value.slice(0, q.start), after = ta.value.slice(ta.selectionStart);
+    ta.value = `${before}@${u.name} ${after}`;
+    const caret = before.length + u.name.length + 2;
+    ta.setSelectionRange(caret, caret);
+    ta.focus(); close();
+  };
+  ta.addEventListener("input", () => { const q = query(); if (q) { sel = 0; renderMenu(q); } else close(); });
+  ta.addEventListener("blur", () => setTimeout(close, 150));
+  ta.addEventListener("keydown", (e) => {
+    if (menu.hidden) return;
+    const q = query(); if (!q) { close(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = (sel + 1) % items.length; renderMenu(q); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = (sel + items.length - 1) % items.length; renderMenu(q); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(sel, q); }
+    else if (e.key === "Escape") { e.stopPropagation(); close(); }
+  });
+  const mentions = () =>
+    [...picked.entries()].filter(([name]) => ta.value.includes("@" + name)).map(([, id]) => id);
+  return { wrap, textarea: ta, mentions };
+}
+
+async function notifyMentions(ids, text, snippet) {
+  if (!ids.length) return;
+  try {
+    await fetch(`/api/projects/${PROJECT_ID}/mentions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: ids, text, snippet, path: currentPath }),
+    });
+  } catch { /* the comment itself is already saved — the email is best-effort */ }
+}
+
+// ---- composer: comment the current selection ----
+function openComposer() {
+  if (!view || !currentPath) return;
+  const sel = view.state.selection.main;
+  if (sel.empty) return;
+  const dom = ensureCommentDom();
+  overlayState = {
+    kind: "composer", pos: sel.to,
+    sel: { from: sel.from, to: sel.to, snippet: view.state.sliceDoc(sel.from, sel.to) },
+  };
+  dom.pop.innerHTML = "";
+  const quote = document.createElement("div");
+  quote.className = "comment-quote";
+  quote.textContent = overlayState.sel.snippet.length > 120
+    ? overlayState.sel.snippet.slice(0, 120) + "…" : overlayState.sel.snippet;
+  const area = mentionArea("Comment… (@ to mention someone)");
+  const row = document.createElement("div");
+  row.className = "comment-btnrow";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.className = "btn small"; cancel.textContent = "Cancel";
+  cancel.addEventListener("click", closeCommentOverlays);
+  const send = document.createElement("button");
+  send.type = "button"; send.className = "btn primary small"; send.textContent = "Comment";
+  send.addEventListener("click", () => submitComposer(area));
+  area.textarea.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); submitComposer(area); }
+  });
+  row.append(cancel, send);
+  dom.pop.append(quote, area.wrap, row);
+  dom.pop.hidden = false;
+  updateCommentFab();                       // the fab hides while the composer is open
+  placeOverlay(dom.pop, overlayState.pos);
+  area.textarea.focus();
+}
+
+function submitComposer(area) {
+  const text = area.textarea.value.trim();
+  if (!text || !overlayState || overlayState.kind !== "composer") return;
+  const { sel } = overlayState;
+  const mentions = area.mentions();
+  const th = {
+    id: newCommentId(), path: currentPath,
+    anchor: { from: sel.from, to: sel.to, snippet: sel.snippet },
+    resolved: false, createdAt: new Date().toISOString(),
+    messages: [{ id: newCommentId(), by: { id: me.id, name: me.name }, at: new Date().toISOString(), text, mentions }],
+  };
+  commentsMap.set(th.id, th);
+  notifyMentions(mentions, text, sel.snippet);
+  closeCommentOverlays();
+  refreshCommentDecos();
+  // Word-style: commenting consumes the selection — collapse it and hand focus back,
+  // so the 💬 button doesn't pop right back up over the freshly commented text.
+  if (view) {
+    view.dispatch({ selection: { anchor: Math.min(sel.to, view.state.doc.length) } });
+    view.focus();
+  }
+}
+
+// ---- thread popover: read, reply, resolve, delete ----
+function msgHtml(m) {
+  let html = escapeHtml(m.text);
+  for (const mid of m.mentions || []) {
+    const u = rosterById.get(mid);
+    if (!u) continue;
+    html = html.split(escapeHtml("@" + u.name)).join(`<span class="mention">${escapeHtml("@" + u.name)}</span>`);
+  }
+  return html;
+}
+
+function openThreads(ids, pos) {
+  const dom = ensureCommentDom();
+  overlayState = { kind: "threads", pos, ids };
+  renderThreadPopover();
+  dom.pop.hidden = false;
+  placeOverlay(dom.pop, pos);
+}
+
+function renderThreadPopover() {
+  if (!overlayState || overlayState.kind !== "threads" || !commentDom) return;
+  const pop = commentDom.pop;
+  const threads = overlayState.ids.map((id) => commentsMap.get(id)).filter((t) => t && !t.resolved);
+  if (!threads.length) { closeCommentOverlays(); return; }
+  pop.innerHTML = "";
+  for (const th of threads) {
+    const box = document.createElement("div");
+    box.className = "comment-thread";
+    const head = document.createElement("div");
+    head.className = "comment-thread-head";
+    const resolve = document.createElement("button");
+    resolve.type = "button"; resolve.className = "mini"; resolve.textContent = "✓ Resolve";
+    resolve.title = "Mark this comment as resolved (hides the highlight)";
+    resolve.addEventListener("click", () => {
+      commentsMap.set(th.id, { ...commentsMap.get(th.id), resolved: true, resolvedBy: { id: me.id, name: me.name }, resolvedAt: new Date().toISOString() });
+      refreshCommentDecos(); renderThreadPopover();
+    });
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "mini"; del.textContent = "🗑";
+    del.title = "Delete the whole comment thread";
+    del.addEventListener("click", () => {
+      if (!confirm("Delete this comment thread?")) return;
+      commentsMap.delete(th.id);
+      refreshCommentDecos(); renderThreadPopover();
+    });
+    head.append(resolve, del);
+    box.appendChild(head);
+    for (const m of th.messages || []) {
+      const row = document.createElement("div");
+      row.className = "comment-msg";
+      const who = authorUser(m.by);
+      row.appendChild(avatarEl(who, { small: true }));
+      const body = document.createElement("div");
+      body.className = "comment-msg-body";
+      body.innerHTML = `<div class="comment-msg-head"><b>${escapeHtml(who.name)}</b> <span class="muted">${escapeHtml(fmtWhen(m.at))}</span></div>
+        <div class="comment-msg-text">${msgHtml(m)}</div>`;
+      row.appendChild(body);
+      box.appendChild(row);
+    }
+    const area = mentionArea("Reply… (@ to mention someone)");
+    area.textarea.rows = 1;
+    const reply = document.createElement("button");
+    reply.type = "button"; reply.className = "btn small comment-replybtn"; reply.textContent = "Reply";
+    const doReply = () => {
+      const text = area.textarea.value.trim();
+      if (!text) return;
+      const cur = commentsMap.get(th.id);
+      if (!cur) return;
+      const mentions = area.mentions();
+      commentsMap.set(th.id, {
+        ...cur,
+        messages: [...(cur.messages || []), { id: newCommentId(), by: { id: me.id, name: me.name }, at: new Date().toISOString(), text, mentions }],
+      });
+      notifyMentions(mentions, text, (cur.anchor && cur.anchor.snippet) || "");
+      renderThreadPopover();
+    };
+    reply.addEventListener("click", doReply);
+    area.textarea.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); doReply(); }
+    });
+    const replyRow = document.createElement("div");
+    replyRow.className = "comment-replyrow";
+    replyRow.append(area.wrap, reply);
+    box.appendChild(replyRow);
+    pop.appendChild(box);
+  }
+  placeOverlay(pop, overlayState.pos);
+}
+
+// Comments changed (mine or a peer's): refresh the highlights and any open popover.
+function onCommentsChanged() {
+  if (!booted) return;
+  refreshCommentDecos();
+  if (overlayState && overlayState.kind === "threads") renderThreadPopover();
+}
+
+// The editor extensions for a text file: highlight field + click-to-open + fab tracking.
+function commentExtensions() {
+  ensureCommentField();
+  if (!commentField) return [];
+  const { EditorView } = CM.view;
+  const { Transaction } = CM.state;
+  return [
+    commentField,
+    EditorView.domEventHandlers({
+      click: (e, v) => {
+        const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos == null) return false;
+        const ids = threadIdsAtPos(pos);
+        if (ids.length) openThreads(ids, pos);
+        else if (overlayState && overlayState.kind === "threads") closeCommentOverlays();
+        return false;                       // never swallow the click: the cursor still moves
+      },
+    }),
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged) {
+        if (overlayState) {
+          overlayState.pos = u.changes.mapPos(overlayState.pos);
+          if (overlayState.sel) {
+            overlayState.sel.from = u.changes.mapPos(overlayState.sel.from);
+            overlayState.sel.to = u.changes.mapPos(overlayState.sel.to, 1);
+          }
+        }
+        if (Transaction && u.transactions.some((tr) => tr.annotation(Transaction.userEvent) !== undefined)) {
+          scheduleCommentWriteBack();
+        }
+      }
+      if (u.selectionSet || u.docChanged || u.focusChanged) updateCommentFab();
+      if (u.docChanged || u.geometryChanged) repositionOverlays();
+    }),
+  ];
 }
 
 // ---------- Splitters ----------
@@ -1728,6 +2169,12 @@ async function init() {
   ydoc = new Y.Doc();
   filesMap = ydoc.getMap("files");
   metaMap = ydoc.getMap("meta");
+  commentsMap = ydoc.getMap("comments");
+  // The @mention roster (D2): everyone who has ever signed in. Best-effort — comments
+  // work without it, you just don't get autocomplete.
+  fetch("/api/users").then((r) => r.json()).then((d) => {
+    if (d && d.ok) { roster = d.users || []; rosterById = new Map(roster.map((u) => [u.id, u])); }
+  }).catch(() => {});
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
   provider = new HocuspocusProvider({ url: `${wsProto}://${location.host}/collab`, name: PROJECT_ID, document: ydoc });
 
@@ -1738,6 +2185,7 @@ async function init() {
 
   filesMap.observe(onFilesChanged);
   metaMap.observe(onMetaChanged);
+  commentsMap.observe(onCommentsChanged);
   noteNotSynced();
   // "connected" is the socket, not the doc — only `synced` means we actually have everyone's
   // work, so that's what flips us to online (see onSynced).
@@ -1769,6 +2217,7 @@ async function init() {
   $("syncForward").addEventListener("mousedown", (e) => e.stopPropagation());
   pagesEl.addEventListener("dblclick", onPdfDblClick);   // inverse search: PDF → source
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && commentDom && !commentDom.pop.hidden) { closeCommentOverlays(); return; }
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
   });
