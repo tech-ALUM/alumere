@@ -7,6 +7,103 @@
 
 ---
 
+## 2026-07-18 (octies) — Parità Overleaf, giro 4/5: Commenti stile Word ✅
+
+Quarto giro dell'arco "parità Overleaf": **commenti ancorati al testo** con **@menzioni** ed
+**email all'actionee**. Selezioni → compare un bottone 💬 accanto alla selezione → popover con
+citazione del testo scelto e campo commento; digitando `@` si apre l'autocomplete sull'anagrafica
+(D2) e la persona menzionata riceve una **email** col progetto linkato. Il testo commentato resta
+**evidenziato in ambra**; click sull'evidenzia → **thread** (messaggi con avatar/ora, menzioni
+colorate, risposta, ✓ Resolve, 🗑 Delete). È il giro che richiedeva il **rebuild del bundle CM6**
+(decorazioni) — fatto in container Node usa-e-getta, bundle committato.
+
+**Dove vivono i dati (la scelta di fondo)**
+- I thread stanno in una **`Y.Map("comments")` dello stesso doc Yjs** (valore = oggetto piano):
+  sync live a tutti i peer **gratis** (stesso canale dei file, zero endpoint nuovi) e persistenza
+  che cavalca gli stessi hook: `onLoadDocument` semina la mappa da **`comments.json`** (accanto a
+  `meta.json`, FUORI da `files/` — un commento non è un sorgente: non entra in compile, zip o
+  history) e `onStoreDocument` la riscrive **solo se è cambiata**. Un salvataggio di soli commenti
+  è "no change" per i file → **`updatedAt` non si muove** (come archivia/tag).
+- **D1 — ancoraggio best-effort `{from, to, snippet}`** (le relative-position Yjs non sopravvivono
+  al rebuild del doc da disco): mentre il file è aperto le decorazioni CM6 **si rimappano da sole**
+  a ogni edit (locale e remoto — passano tutti dalla stessa pipeline di transazioni); il client che
+  **edita** riscrive gli anchor "assestati" nella mappa (debounce 2s, solo se qualcosa si è mosso →
+  niente ping-pong fra viewer); alla riapertura, se gli offset sono stali, lo **snippet rilocalizza**
+  l'occorrenza più vicina. Testo commentato cancellato → l'evidenzia sparisce, il thread resta
+  (lo mostrerà il review panel del giro 5).
+- **D2 — `users.json` popolato al login**: upsert `{id, name, lastLoginAt}` a ogni verify (lock a
+  catena di Promise come tags.json) + `GET /api/users` per l'autocomplete. Si può menzionare **solo
+  chi ha già fatto login**.
+- **Email = unica cosa che il client non può fare da sé** → endpoint minimale
+  `POST /api/projects/:id/mentions`: destinatari validati contro `users.json` (niente mail cannon),
+  no auto-notifica, cap 30/10min per mittente, SMTP off → log (stesso pattern del magic link).
+
+**Rebuild del bundle**: `build/cm-entry.mjs` ora esporta anche `Decoration/WidgetType/ViewPlugin`
+(view) e `StateField/StateEffect/RangeSet/RangeSetBuilder/Transaction` (state) — servono alle
+decorazioni e a distinguere le transazioni utente (write-back solo sui MIEI edit). Il fallback CDN
+di `loadCodeMirror` li ha già (moduli interi); bundle assente/vecchio → commenti spenti in silenzio,
+il resto dell'editor vive.
+
+**Verificato** (dev container :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh` 16/16)
+- **Flusso intero a schermo**: selezione "compiled" → 💬 → popover con quote → `@pa` filtra
+  l'anagrafica → pick "Paolo Rossi" → Comment → evidenzia ambra; click → thread (autore, ora,
+  menzione colorata) → Reply → secondo messaggio nel thread.
+- **Server**: email di menzione loggata (SMTP off) con mittente/progetto/file/testo giusti;
+  `comments.json` scritto col thread completo; log store = "**no change**" → `updatedAt` fermo.
+  `users.json` popolato da due login veri via magic-link (Paolo Rossi, Maria Delcarmen).
+- **D1 sul campo**: riga inserita SOPRA il commento → l'evidenzia resta su "compiled" (rimappa
+  live) e dopo il debounce l'anchor su disco passa 345→383 (**esattamente** i +38 caratteri);
+  **reload** → l'evidenzia si ricostruisce giusta. **Due tab sullo stesso progetto**: il commento
+  appare nel secondo tab; **✓ Resolve dal tab 2 → l'evidenzia sparisce in ENTRAMBI all'istante**.
+  Delete con confirm → thread rimosso ovunque e da `comments.json`.
+- **Tema scuro**: composer/popover sulle variabili `--panel/--ink/--line` → leggibili in dark.
+- Progetto "Sample paper" **riportato intatto** (riga di test rimossa; resta solo il thread di
+  prova risolto, invisibile finché non c'è il review panel).
+- ⚠️ Inciampo del tool browser (già noto dal giro rinomina): Enter/BackSpace sintetici non arrivano
+  agli handler — verificato con click reali e `execCommand`; per gli utenti veri la tastiera va.
+
+**Due fix dal check di Tommy** (provato sul campo, stessa sessione)
+1. **La selezione del testo non si vedeva** (né per commentare né per copia/incolla). Non c'entrano
+   i commenti: CM6 disegna la selezione su un layer **dietro** gli sfondi delle righe, e la nostra
+   riga attiva era **opaca** (`--ed-active-line` con `!important`) → copriva la selezione proprio
+   dove si seleziona quasi sempre (la riga attiva; le selezioni corte ci vivono per intero). Fix:
+   riga attiva = **velo translucido rgba** in tutte e 4 le palette (tinta calcolata per rendere a
+   schermo come il colore di prima) → la selezione traspare. Nota a futura memoria nel CSS: quel
+   valore DEVE restare translucido.
+2. **Il bottone 💬 restava lì** anche cliccando altrove. Due cause, in due giri di check:
+   la logica (ora si nasconde quando l'editor **perde il focus**, e alla Word **creare il commento
+   consuma la selezione** — collassa + focus all'editor, così il fab non rispunta sul testo appena
+   commentato; il mousedown del fab resta `preventDefault`, quindi cliccarlo non perde la selezione)
+   — ma soprattutto **il solito `[hidden]` battuto dall'author-CSS**: `.comment-fab` ha
+   `display:grid`, che vince su `[hidden]{display:none}` → `fab.hidden = true` settava la proprietà
+   (le mie sonde JS dicevano "hidden") ma il bottone **restava disegnato**. È la **terza volta** che
+   questo trappolone morde il progetto (`.projname-btn`, `.editor-empty`, ora `.comment-fab`):
+   regola pratica — ogni elemento nascosto via attributo `hidden` che ha un `display` proprio nel
+   CSS DEVE avere anche la riga `X[hidden]{display:none}`. E lezione di verifica gemella di quella
+   synctex: **una proprietà non è una prova visiva** — il check va fatto sul pixel (screenshot),
+   non sul flag che il codice stesso setta.
+
+**Riverificato in browser** dopo i fix (chiaro + Slate Dark, console pulita): doppio-click su una
+parola della riga attiva → selezione **visibile** in entrambe le palette; click sul PDF → fab
+**sparito a schermo** (screenshot, non più solo la proprietà); commento creato → fab non ricompare,
+selezione collassata; evidenzia ambra leggibile anche su fondo scuro. I miei commenti temporanei
+di test rimossi.
+
+**Alla domanda di Tommy**: sì, la **colonna sinistra con review panel + chat** non c'è ancora —
+è il **giro 5** del piano (panel = lista/gestione dei commenti, anche risolti e orfani; chat).
+
+**Processo**: prima applicazione vera della regola nuova — implementato, verificato, **Tommy ha
+provato** (e trovato i due difetti sopra, corretti e riprovati), **OK arrivato → commit+push**.
+**Email di menzione**: in dev l'SMTP resta spento (mail nel log); predisposto comunque il
+passthrough opzionale delle variabili `SMTP_*` in `docker-compose.dev.yml` (default vuoti = spento,
+si attiva con un `.env` locale) — ma la **prova con una mail vera si farà direttamente sul live**,
+dove l'SMTP è già configurato. ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+**Prossimo:** **giro 5 — Review panel + Chat** (panel = lista/gestione dei commenti, anche risolti
+e orfani; chat = `Y.Array("chat")` + `chat.json` con lo stesso pattern di persistenza dei commenti).
+
+---
+
 ## 2026-07-18 (septies) — SyncTeX: fix sfasamento di una riga (punti, non box) + freccia visibile ✅
 
 Secondo giro di prova sul campo di Tommy dopo il fix del pollice: meglio, ma l'inverse atterrava
