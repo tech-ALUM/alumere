@@ -7,6 +7,41 @@
 
 ---
 
+## 2026-07-18 (septies) — SyncTeX: fix sfasamento di una riga (punti, non box) + freccia visibile ✅
+
+Secondo giro di prova sul campo di Tommy dopo il fix del pollice: meglio, ma l'inverse atterrava
+**sempre una riga sotto** quella cliccata. Causa: le **hbox** synctex (che usavo per il containment)
+portano la riga dove il paragrafo/item **finisce** — il box di un bullet si chiude dove inizia il
+successivo. I **record puntuali** (kern/glue/current), invece, vengono emessi man mano che la riga
+sorgente avanza: la loro attribuzione segue la riga visiva da vicino, ed è pure **sensibile alla
+colonna** (i punti di fine riga visiva appartengono già alla riga sorgente successiva).
+
+**Cosa è cambiato** (`app.js`)
+- **Inverse = punto valido più vicino** (peso verticale 3x; il containment sui box resta solo come
+  fallback per synctex degeneri senza punti). I punti di file **non-progetto** (.aux/.toc, classi)
+  sono filtrati con `hasPath` *prima* della scelta, così non rubano il click al testo vero accanto
+  (es. le righe del TOC ora risolvono sui punti del sorgente vicino, non su `main.toc`).
+- **Forward = mediana dei punti della riga**: scarta sia il punto vagante di fine-riga-precedente sia
+  i box altrui attribuiti alla riga. La **banda** ora si aggancia alla geometria del box di riga vero
+  sotto lo spot (solo geometria, l'attribuzione non conta) → abbraccia il testo invece di stargli
+  sopra; su `\begin{equation}` evidenzia l'intero blocco equazione.
+- **Freccia sul divisorio più visibile** (Tommy non la trovava): 30px (era 22), icona 16, ombra, e
+  posizionata al **25% dell'altezza** della barra — a metà si mimetizza, in cima sfugge.
+
+**Verificato** (click veri su punti scelti a schermo, console pulita) — tutti i bersagli **esatti**
+(prima tutti +1): i 3 bullet → `intro.tex:6/7/8`; riga di Eulero → `math.tex:2`; click a metà del
+paragrafo "ciaooo seee godeeee" su "seee" → `main.tex:27` (**column-aware**); equazione
+sull'integrale → `math.tex:3` (l'env — i punti del contenuto stanno sulla parte destra della
+formula). Forward su abstract/item/equation: banda sempre sulla riga giusta, misurata al bp
+(es. riga 18 → banda [309,321] con baseline a 317). Freccia: centro a 218px = 25% esatto, il click
+non avvia il drag.
+
+**Processo (nuova regola, richiesta di Tommy):** d'ora in poi **niente commit/push senza il suo
+check** — implementa → verifica → Tommy prova → OK → commit+push (diario incluso). Vale da subito;
+i due giri di fix di oggi committati al volo sono esattamente il caso da evitare.
+
+---
+
 ## 2026-07-18 (sexies) — SyncTeX: fix sfasamento di 1 pollice + freccia sul divisorio ✅
 
 Tommy ha provato il giro 3 sul campo e **l'ha bucato subito**: forward sull'abstract evidenziava la
