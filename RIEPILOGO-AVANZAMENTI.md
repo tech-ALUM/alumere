@@ -7,6 +7,75 @@
 
 ---
 
+## 2026-07-18 — Home stile Overleaf: lista + sidebar, azioni, archivio, tag + fix "ultima modifica" ✅
+
+Grosso giro sulla **home**, con Overleaf come riferimento (disposizione e interazioni, non i
+colori: pelle di Alumère, chiaro/scuro nostri). Da griglia di card a **due pannelli**. Tocca
+`server.js` (nuovi endpoint + un fix history) e i 3 file client (`index.html`, `archive.js`
+**riscritta**, `styles.css`). **Niente dipendenze nuove, niente rebuild del bundle**: file statici
++ `node --watch` → basta reload. Tutto verificato in browser (dev :3000), chiaro e scuro, console pulita.
+
+**Decisione di fondo (Tommy):** modello **condiviso/globale**, non per-utente. Tag e archivio valgono
+per tutti (è una libreria di lavoro condivisa). Niente "Tuoi/Condivisi", niente stato per-persona.
+"Proprietario" = solo chi ha creato (informativo, non è controllo d'accesso — quello è sicurezza giro 2).
+
+**Cosa c'è ora**
+- **Layout a due pannelli**: topbar (brand + utente + ⚙) → **sidebar** sx (Nuovo progetto, viste, tag)
+  + **main** (titolo + ricerca + tabella). Riempie lo schermo grande (il problema di resa su monitor
+  largo si risolve qui).
+- **Lista** (rimpiazza le card): `Titolo · Proprietario · Ultima modifica · Azioni`, tempo relativo
+  ("3 mesi fa"), ricerca client-side.
+- **Menu "Nuovo progetto"**: Progetto vuoto / Da template (disabilitato, "presto") / Carica progetto
+  (.zip). "Carica .zip" tolto dalla topbar e infilato qui.
+- **Azioni di riga** (icone **SVG uniformi** + **tooltip** su hover): **Scarica .zip** (`GET …/download`,
+  zippa `files/`), **Scarica PDF** (`GET …/pdf`, compila da disco con euristica main.tex + xelatex — è
+  l'ultimo stato *salvato*, non l'ultima battuta), **Archivia/Ripristina**, **Elimina**. In vista
+  Archiviati l'archivia diventa ripristina. Il "copia" di Overleaf è escluso di proposito.
+- **Archivio**: flag `meta.archived` (condiviso) + `POST …/archive`; vista **Archiviati** in sidebar.
+  Non tocca `updatedAt` (non è una modifica di contenuto).
+- **Tag condivisi**: registro globale `PROJECTS_DIR/tags.json` (`{id,name,color}`) + `meta.tags:[id]`.
+  Endpoint: lista, crea (nomi duplicati bloccati case-insensitive, colore da palette fissa), elimina
+  (**cascata**: tolto da tutti i progetti), `PUT …/tags` (setta l'array, id sconosciuti scartati; non
+  tocca `updatedAt`). UI: sezione **Tag** in sidebar (pallino colorato + conteggio, filtra) + **Senza
+  tag** + **＋ Nuovo tag** (nome + 8 colori); **chip** colorati sulle righe (× per togliere); **🏷** su
+  hover apre il menu di assegnazione (spunta i tag, resta aperto e aggiorna dal vivo, oppure crea-e-assegna).
+- **Fix "ultima modifica"**: `updatedAt` veniva bumpato a **ogni** salvataggio del doc, anche a vuoto
+  (riconnessione, riapertura, redeploy ri-materializza file identici) → la home mostrava attività mai
+  fatta e correva avanti rispetto alla cronologia. Ora `recordVersion` **ritorna null** sui no-op e
+  `onStoreDocument` bumpa `updatedAt`/`updatedBy` **solo** quando registra un cambiamento vero → "ultima
+  modifica" = timestamp dell'ultima voce di cronologia. È **da qui in avanti**: i progetti già
+  disallineati si riallineano al primo salvataggio sostanziale.
+
+**Scelte (e perché)**
+- **Pelle nostra, layout loro**: Overleaf come riferimento di UX; colori e temi restano di Alumère.
+- **`overflow:visible` sulla lista + angoli arrotondati a mano**: per non far tagliare i tooltip delle
+  azioni (prima `overflow:hidden` serviva agli angoli tondi).
+- **Icone SVG a tratto** al posto delle emoji: le emoji avevano metriche tutte diverse e non si
+  allineavano mai nel box; gli SVG (16px, `currentColor`) si tematizzano da soli.
+- **Tag globali su file**, non per-utente: coerente con la libreria condivisa, zero stato per-persona;
+  `tags.json` sotto il volume dati (già nel backup). Lock a catena di Promise per le scritture del registro.
+- **Assegnazione per-riga** (menu 🏷); tag in massa rimandato.
+- **`updatedAt` solo su cambi sostanziali**: "ultima modifica" deve dire l'ultima modifica *vera*, non
+  "ho ricompilato/riaperto".
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita)
+- Menu Nuovo progetto; lista con le 4 colonne; azioni: **zip 200 `application/zip`**, **PDF 200
+  `application/pdf` compilato in ~0.9s** (xelatex reale), archivia↔ripristina coi contatori, elimina.
+- Fix updatedAt su **entrambi i rami**: store a vuoto → log `(… no change)`, `updatedAt` fermo;
+  modifica vera (commento iniettato via la EditorView di CM6, poi annullato) → `updatedAt` bumpato +
+  nuova versione, **allineati a 4 ms**.
+- Tag: crea col colore scelto, assegna/rimuovi (chip + menu live che resta aperto), filtra per tag +
+  Senza tag, elimina con cascata, nomi duplicati respinti, id inventati scartati.
+
+**Rimandati di proposito**: **template** (Step G, da scrivere prima), **tag in massa** (multi-selezione),
+**Cestino/soft-delete** ("archivia v2" — l'Elimina resta definitivo per ora).
+
+**Prossimo**: altri screen di Tommy (editor?) per il prossimo giro. ⚠️ **Non è live**: file statici →
+nessun rebuild del bundle, ma serve il **pull+rebuild sul VPS** (lo fa Albi) per portare online il giro.
+Il dato nuovo (`tags.json`, `meta.archived/tags`) vive nel volume `alumere-data`, già coperto dal backup.
+
+---
+
 ## 2026-07-17 (ter) — Giro UX: home, errori LaTeX, tema scuro, anteprima PDF.js ✅
 
 Primo grosso giro dedicato a **interfaccia ed esperienza d'uso** (nessuna nuova logica di
