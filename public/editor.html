@@ -58,6 +58,22 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
   </header>
 
   <main class="workspace">
+    <!-- Icon rail (giro 5): switches WHICH panel occupies the left column. One panel at a
+         time — the hidden ones leave the grid entirely (.pane[hidden] → display:none). -->
+    <nav class="rail" aria-label="Side panels">
+      <button id="railFiles" class="rail-btn active" type="button" title="Project files">
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H5a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 5 16h8a1.5 1.5 0 0 0 1.5-1.5V6.5z"/><path d="M10 2v4.5h4.5"/></svg>
+      </button>
+      <button id="railReview" class="rail-btn" type="button" title="Review — comments on the text">
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 11a1.8 1.8 0 0 1-1.8 1.8H6.5L2.5 16V4.3a1.8 1.8 0 0 1 1.8-1.8h9.4a1.8 1.8 0 0 1 1.8 1.8z"/><path d="M5.8 6.4h6.4M5.8 9.2h4.2"/></svg>
+        <span class="rail-badge" id="reviewBadge" hidden></span>
+      </button>
+      <button id="railChat" class="rail-btn" type="button" title="Chat with your collaborators">
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 11.3H4.6L2 13.6V4.9a1.6 1.6 0 0 1 1.6-1.6h7a1.6 1.6 0 0 1 1.6 1.6v1"/><path d="M7.4 8.2a1.6 1.6 0 0 1 1.6-1.6h5.4A1.6 1.6 0 0 1 16 8.2v7.3l-2.6-2.3H9a1.6 1.6 0 0 1-1.6-1.6z"/></svg>
+        <span class="rail-badge" id="chatBadge" hidden></span>
+      </button>
+    </nav>
+
     <section class="pane files" id="filesPane">
       <div class="pane-head">
         <span>Project</span>
@@ -68,6 +84,37 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       </div>
       <ul id="tree" class="tree"></ul>
       <div class="files-hint">Click a file to open it · hover a row to rename or delete</div>
+    </section>
+
+    <!-- Review panel (giro 5): every comment thread of the project — open, resolved and
+         orphaned (commented text deleted) — with jump-to-text, reply, resolve, delete. -->
+    <section class="pane side review" id="reviewPane" hidden>
+      <div class="pane-head">
+        <span>Review</span>
+        <div class="pane-actions">
+          <button id="revTabOpen" class="tabbtn active" type="button" title="Comments still open">Open</button>
+          <button id="revTabResolved" class="tabbtn" type="button" title="Comments marked as resolved">Resolved</button>
+        </div>
+      </div>
+      <div id="reviewList" class="review-list"></div>
+    </section>
+
+    <!-- Chat (giro 5): a plain project-wide group chat. Messages live in the shared Yjs doc
+         (Y.Array "chat") and persist as chat.json — same pattern as comments. -->
+    <section class="pane side chat" id="chatPane" hidden>
+      <div class="pane-head"><span>Chat</span></div>
+      <div id="chatScroll" class="chat-scroll">
+        <div id="chatEmpty" class="chat-empty">
+          <div class="chat-empty-ic">💬</div>
+          No messages yet<br />Start the conversation by saying hello or sharing an update.
+        </div>
+        <div id="chatList"></div>
+      </div>
+      <div class="chat-composer">
+        <textarea id="chatInput" class="comment-input" rows="1" maxlength="2000"
+                  placeholder="Message your collaborators… (Enter to send)"></textarea>
+        <button id="chatSend" class="btn primary small" type="button" title="Send (Enter)">Send</button>
+      </div>
     </section>
 
     <div class="splitter" data-target="filesPane"></div>

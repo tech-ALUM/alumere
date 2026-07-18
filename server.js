@@ -1170,6 +1170,15 @@ async function readComments(id) {
   try { const j = JSON.parse(await readFile(commentsPath(id), "utf8")); return j && typeof j.threads === "object" ? j.threads : {}; }
   catch { return {}; }
 }
+// Chat (giro 5) rides the same doc as an Y.Array of plain message objects; persisted as
+// chat.json next to comments.json (same reasoning: not a source file, stays out of
+// compiles, zips and history).
+const COLLAB_CHAT_KEY = "chat";
+const chatPath = (id) => path.join(projectDir(id), "chat.json");
+async function readChat(id) {
+  try { const j = JSON.parse(await readFile(chatPath(id), "utf8")); return Array.isArray(j.messages) ? j.messages : []; }
+  catch { return []; }
+}
 
 async function attachCollab(httpServer) {
   let serverMod, WebSocketServer, Y;
@@ -1209,6 +1218,12 @@ async function attachCollab(httpServer) {
       const threads = await readComments(documentName);
       document.transact(() => { for (const [tid, th] of Object.entries(threads)) commentsMap.set(tid, th); });
     }
+    // Chat too (same posture).
+    const chatArr = document.getArray(COLLAB_CHAT_KEY);
+    if (chatArr.length === 0) {
+      const messages = await readChat(documentName);
+      if (messages.length) document.transact(() => chatArr.push(messages));
+    }
     console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
     // History: capture the on-disk starting point the first time this project is opened.
     await ensureBaseline(documentName, files, meta.createdBy || SYSTEM_USER)
@@ -1242,6 +1257,14 @@ async function attachCollab(httpServer) {
       const cur = await readFile(commentsPath(documentName), "utf8").catch(() => null);
       if (cur !== next) await writeFile(commentsPath(documentName), next, "utf8");
     } catch (e) { console.warn(`[alumere] comments store failed for "${documentName}": ${e.message}`); }
+    // Chat persists the same way: only when it actually changed, so it never touches
+    // updatedAt/history on its own (a chat-only save is a "no change" store for files).
+    try {
+      const messages = document.getArray(COLLAB_CHAT_KEY).toArray().filter((m) => m && typeof m === "object");
+      const next = JSON.stringify({ messages }, null, 2);
+      const cur = await readFile(chatPath(documentName), "utf8").catch(() => null);
+      if (cur !== next) await writeFile(chatPath(documentName), next, "utf8");
+    } catch (e) { console.warn(`[alumere] chat store failed for "${documentName}": ${e.message}`); }
     // History: this same debounced save is our version boundary. A restore or explicit
     // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
     // version; we remember the last nonce we acted on in meta.json, so the flag needs no

@@ -1271,12 +1271,12 @@ function mentionArea(placeholder) {
   return { wrap, textarea: ta, mentions };
 }
 
-async function notifyMentions(ids, text, snippet) {
+async function notifyMentions(ids, text, snippet, path = currentPath) {
   if (!ids.length) return;
   try {
     await fetch(`/api/projects/${PROJECT_ID}/mentions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: ids, text, snippet, path: currentPath }),
+      body: JSON.stringify({ to: ids, text, snippet, path }),
     });
   } catch { /* the comment itself is already saved — the email is best-effort */ }
 }
@@ -1354,6 +1354,9 @@ function openThreads(ids, pos) {
   const dom = ensureCommentDom();
   overlayState = { kind: "threads", pos, ids };
   renderThreadPopover();
+  // If every thread was dead (resolved/deleted since the ids were captured — e.g. from a
+  // stale rAF), the render above already closed the popover: don't re-show an empty shell.
+  if (!overlayState) return;
   dom.pop.hidden = false;
   placeOverlay(dom.pop, pos);
 }
@@ -1428,11 +1431,14 @@ function renderThreadPopover() {
   placeOverlay(pop, overlayState.pos);
 }
 
-// Comments changed (mine or a peer's): refresh the highlights and any open popover.
+// Comments changed (mine or a peer's): refresh the highlights, any open popover, and
+// the review panel + rail badge (giro 5).
 function onCommentsChanged() {
   if (!booted) return;
   refreshCommentDecos();
   if (overlayState && overlayState.kind === "threads") renderThreadPopover();
+  renderReviewPanel();
+  updateRailBadges();
 }
 
 // The editor extensions for a text file: highlight field + click-to-open + fab tracking.
@@ -1472,10 +1478,264 @@ function commentExtensions() {
   ];
 }
 
+// ---------- Side panels (giro 5): icon rail — Files · Review · Chat ----------
+// One panel occupies the left column at a time (the hidden ones leave the grid, see CSS).
+// Review lists EVERY thread of the project — open, resolved, orphaned — with jump/reply/
+// resolve/delete; Chat is a plain group chat over Y.Array("chat"), persisted server-side
+// as chat.json with the same hooks as comments.
+let sidePanel = "files";
+let reviewFilter = "open";               // which tab of the review panel is showing
+let chatArr = null, chatUnread = 0;      // unread only counts while the chat panel is closed
+
+function setSidePanel(name) {
+  sidePanel = name;
+  $("filesPane").hidden = name !== "files";
+  $("reviewPane").hidden = name !== "review";
+  $("chatPane").hidden = name !== "chat";
+  $("railFiles").classList.toggle("active", name === "files");
+  $("railReview").classList.toggle("active", name === "review");
+  $("railChat").classList.toggle("active", name === "chat");
+  if (name === "review") renderReviewPanel();
+  if (name === "chat") {
+    chatUnread = 0; updateRailBadges();
+    renderChat(); scrollChatBottom(true);
+    $("chatInput").focus();
+  }
+}
+
+function updateRailBadges() {
+  const open = commentsMap ? [...commentsMap.values()].filter((t) => t && !t.resolved).length : 0;
+  const rb = $("reviewBadge");
+  rb.hidden = !open; rb.textContent = open > 99 ? "99+" : String(open);
+  const cb = $("chatBadge");
+  cb.hidden = !chatUnread; cb.textContent = chatUnread > 99 ? "99+" : String(chatUnread);
+}
+
+// The text a thread's anchor lives in — read from the SHARED files map, so it works for
+// files that aren't open in the editor. null = the file is gone (or turned binary).
+function fileTextOf(path) {
+  const v = filesMap && filesMap.get(path);
+  return v instanceof Y.Text ? v.toString() : null;
+}
+function threadState(th) {
+  const text = fileTextOf(th.path);
+  if (text == null) return { orphan: true, reason: "file deleted" };
+  return resolveAnchor(text, th.anchor) ? { orphan: false } : { orphan: true, reason: "text deleted" };
+}
+
+// Jump from a review card to the thread's place in the source (cross-file, like gotoIssue).
+function gotoThread(th) {
+  if (!hasPath(th.path)) return;
+  if (currentPath !== th.path) openFile(th.path);
+  if (!view) return;
+  const r = resolveAnchor(view.state.doc.toString(), th.anchor);
+  const pos = Math.min(r ? r.from : (th.anchor && th.anchor.from) || 0, view.state.doc.length);
+  view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  // Open the in-text popover once the scroll has landed (placing it needs fresh coords).
+  // Re-check inside the callback: frames can arrive late (background tab) and the thread
+  // may have been resolved or deleted in the meantime.
+  if (r && !th.resolved) requestAnimationFrame(() => {
+    const cur = commentsMap.get(th.id);
+    if (cur && !cur.resolved) openThreads([th.id], r.from);
+  });
+}
+
+function renderReviewPanel() {
+  if ($("reviewPane").hidden || !commentsMap) return;
+  $("revTabOpen").classList.toggle("active", reviewFilter === "open");
+  $("revTabResolved").classList.toggle("active", reviewFilter === "resolved");
+  const listEl = $("reviewList");
+  listEl.innerHTML = "";
+  const want = [...commentsMap.entries()]
+    .map(([id, th]) => ({ ...th, id }))
+    .filter((t) => t && t.messages && (reviewFilter === "open" ? !t.resolved : !!t.resolved));
+  // Document order: by file, then by position in the file.
+  want.sort((a, b) => (a.path || "").localeCompare(b.path || "")
+    || (((a.anchor && a.anchor.from) || 0) - ((b.anchor && b.anchor.from) || 0)));
+  if (!want.length) {
+    const d = document.createElement("div");
+    d.className = "review-empty";
+    d.textContent = reviewFilter === "open"
+      ? "No open comments. Select some text in the editor and press 💬 to start a thread."
+      : "No resolved comments yet.";
+    listEl.appendChild(d);
+    return;
+  }
+  for (const th of want) listEl.appendChild(reviewCard(th));
+}
+
+function reviewCard(th) {
+  const st = threadState(th);
+  const card = document.createElement("div");
+  card.className = "review-card" + (th.resolved ? " resolved" : "");
+  const top = document.createElement("div");
+  top.className = "review-card-top";
+  const p = document.createElement("span");
+  p.className = "review-path"; p.textContent = th.path; p.title = th.path;
+  top.appendChild(p);
+  if (st.orphan) {
+    const f = document.createElement("span");
+    f.className = "review-flag"; f.textContent = st.reason;
+    f.title = "The commented text is no longer there — the thread is kept here in Review.";
+    top.appendChild(f);
+  }
+  card.appendChild(top);
+  const quote = document.createElement("div");
+  quote.className = "comment-quote";
+  const snip = (th.anchor && th.anchor.snippet) || "";
+  quote.textContent = snip.length > 120 ? snip.slice(0, 120) + "…" : (snip || "(no text)");
+  if (hasPath(th.path)) {
+    quote.title = "Jump to this point in the file";
+    quote.addEventListener("click", () => gotoThread(th));
+  }
+  card.appendChild(quote);
+  for (const m of th.messages || []) {
+    const row = document.createElement("div");
+    row.className = "comment-msg";
+    const who = authorUser(m.by);
+    row.appendChild(avatarEl(who, { small: true }));
+    const body = document.createElement("div");
+    body.className = "comment-msg-body";
+    body.innerHTML = `<div class="comment-msg-head"><b>${escapeHtml(who.name)}</b> <span class="muted">${escapeHtml(fmtWhen(m.at))}</span></div>
+      <div class="comment-msg-text">${msgHtml(m)}</div>`;
+    row.appendChild(body);
+    card.appendChild(row);
+  }
+  if (th.resolved && th.resolvedBy) {
+    const d = document.createElement("div");
+    d.className = "muted"; d.style.fontSize = "11px";
+    d.textContent = `✓ Resolved by ${th.resolvedBy.name}${th.resolvedAt ? " · " + fmtWhen(th.resolvedAt) : ""}`;
+    card.appendChild(d);
+  }
+  if (!th.resolved) {
+    const area = mentionArea("Reply… (@ to mention someone)");
+    area.textarea.rows = 1;
+    const reply = document.createElement("button");
+    reply.type = "button"; reply.className = "btn small comment-replybtn"; reply.textContent = "Reply";
+    const doReply = () => {
+      const text = area.textarea.value.trim();
+      const cur = commentsMap.get(th.id);
+      if (!text || !cur) return;
+      const mentions = area.mentions();
+      commentsMap.set(th.id, {
+        ...cur,
+        messages: [...(cur.messages || []), { id: newCommentId(), by: { id: me.id, name: me.name }, at: new Date().toISOString(), text, mentions }],
+      });                                  // the map observer re-renders the panel
+      notifyMentions(mentions, text, (cur.anchor && cur.anchor.snippet) || "", cur.path);
+    };
+    reply.addEventListener("click", doReply);
+    area.textarea.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); doReply(); }
+    });
+    const rr = document.createElement("div");
+    rr.className = "comment-replyrow";
+    rr.append(area.wrap, reply);
+    card.appendChild(rr);
+  }
+  const actions = document.createElement("div");
+  actions.className = "review-actions";
+  const toggle = document.createElement("button");
+  toggle.type = "button"; toggle.className = "mini";
+  toggle.textContent = th.resolved ? "↺ Reopen" : "✓ Resolve";
+  toggle.title = th.resolved
+    ? "Reopen this thread (the highlight comes back if its text still exists)"
+    : "Mark this comment as resolved (hides the highlight)";
+  toggle.addEventListener("click", () => {
+    const cur = commentsMap.get(th.id);
+    if (!cur) return;
+    let next;
+    if (th.resolved) {                     // Yjs rejects `undefined` values — drop the keys
+      next = { ...cur, resolved: false };
+      delete next.resolvedBy; delete next.resolvedAt;
+    } else {
+      next = { ...cur, resolved: true, resolvedBy: { id: me.id, name: me.name }, resolvedAt: new Date().toISOString() };
+    }
+    commentsMap.set(th.id, next);
+    refreshCommentDecos();
+  });
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "mini"; del.textContent = "🗑";
+  del.title = "Delete the whole comment thread";
+  del.addEventListener("click", () => {
+    if (!confirm("Delete this comment thread?")) return;
+    commentsMap.delete(th.id);
+    refreshCommentDecos();
+  });
+  actions.append(toggle, del);
+  card.appendChild(actions);
+  return card;
+}
+
+// ---------- Chat (giro 5) ----------
+function chatMessages() { return chatArr ? chatArr.toArray().filter((m) => m && m.text && m.by) : []; }
+
+function sendChat() {
+  const ta = $("chatInput");
+  const text = ta.value.trim();
+  if (!text || !chatArr) return;
+  chatArr.push([{ id: newCommentId(), by: { id: me.id, name: me.name }, at: new Date().toISOString(), text }]);
+  ta.value = "";
+  autoGrowChatInput();
+  scrollChatBottom(true);                  // the array observer already re-rendered the list
+  ta.focus();
+}
+
+function onChatChanged(e) {
+  if (!booted) return;
+  if (sidePanel === "chat") { renderChat(); scrollChatBottom(); }
+  else {
+    let n = 0;
+    for (const d of e.changes.delta) if (d.insert) for (const m of d.insert) if (m && m.by && m.by.id !== me.id) n++;
+    if (n) { chatUnread += n; updateRailBadges(); }
+  }
+}
+
+function renderChat() {
+  const list = $("chatList");
+  const msgs = chatMessages();
+  $("chatEmpty").hidden = msgs.length > 0;
+  list.innerHTML = "";
+  let prev = null;
+  for (const m of msgs) {
+    // Consecutive messages from the same person within 3′ stack under one header.
+    const compact = !!prev && prev.by.id === m.by.id && (Date.parse(m.at) - Date.parse(prev.at) < 3 * 60e3);
+    const row = document.createElement("div");
+    row.className = "chat-msg" + (compact ? " compact" : "");
+    const body = document.createElement("div");
+    body.className = "chat-msg-body";
+    if (compact) {
+      const g = document.createElement("span"); g.className = "chat-gutter";
+      row.appendChild(g);
+    } else {
+      const who = authorUser(m.by);
+      row.appendChild(avatarEl({ ...who, isMe: m.by.id === me.id }, { small: true }));
+      body.innerHTML = `<div class="chat-msg-head"><b>${escapeHtml(who.name)}</b> <span class="muted">${escapeHtml(fmtWhen(m.at))}</span></div>`;
+    }
+    const t = document.createElement("div");
+    t.className = "chat-msg-text"; t.textContent = m.text;
+    body.appendChild(t);
+    row.appendChild(body);
+    list.appendChild(row);
+    prev = m;
+  }
+}
+
+// Pin to the bottom on send/open; on incoming messages only if the reader was already
+// near the bottom (don't yank someone who scrolled up to read history).
+function scrollChatBottom(force = false) {
+  const sc = $("chatScroll");
+  if (force || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80) sc.scrollTop = sc.scrollHeight;
+}
+function autoGrowChatInput() {
+  const ta = $("chatInput");
+  ta.style.height = "auto";
+  ta.style.height = Math.min(110, ta.scrollHeight) + "px";
+}
+
 // ---------- Splitters ----------
 let filesW = 248, editorFrac = 0.5;
 const workspace = document.querySelector(".workspace");
-function applyLayout() { workspace.style.gridTemplateColumns = `${filesW}px 6px ${editorFrac}fr 6px ${1 - editorFrac}fr`; }
+function applyLayout() { workspace.style.gridTemplateColumns = `46px ${filesW}px 6px ${editorFrac}fr 6px ${1 - editorFrac}fr`; }
 function setupSplitters() {
   document.querySelectorAll(".splitter").forEach((sp, i) => {
     sp.addEventListener("mousedown", (e) => {
@@ -1504,7 +1764,7 @@ function setupSplitters() {
 function slug(s) { return (s || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "document"; }
 function errorScreen(msg) {
   return `<div style="height:100%;display:grid;place-items:center;font-family:'Inter',sans-serif;color:#243240;text-align:center">
-    <div><h2 style="margin:0 0 8px">${msg}</h2><p><a href="index.html">← Torna ai progetti</a></p></div></div>`;
+    <div><h2 style="margin:0 0 8px">${msg}</h2><p><a href="index.html">← Back to projects</a></p></div></div>`;
 }
 
 // ---------- Real-time connection status + presence ----------
@@ -1533,7 +1793,7 @@ function avatarEl(user, { small = false } = {}) {
   const el = document.createElement("span");
   el.className = "avatar" + (small ? " avatar-sm" : "") + (user.isMe ? " is-me" : "");
   el.style.setProperty("--avatar-color", user.color || "var(--accent)");
-  const label = user.name + (user.isMe ? " (tu)" : "");
+  const label = user.name + (user.isMe ? " (you)" : "");
   el.dataset.name = label;
   el.setAttribute("aria-label", label);
   if (small) el.title = label;     // tree rows sit in a scroller: a CSS tip would be clipped
@@ -1662,6 +1922,11 @@ function onSynced() {
       else if (files[0]) openFile(files[0].path);
       else renderTabs();                                     // empty project → show the empty state
     }
+    // Giro 5: the seeded comments/chat arrived before `booted`, so their observers were
+    // silent — paint the initial state once. History is never "unread": the badge starts
+    // counting from messages that arrive live.
+    updateRailBadges();
+    renderChat();
     compile();
   }
   onAwarenessChange();           // booted by now, so this actually paints the strip + markers
@@ -1691,7 +1956,7 @@ function fmtWhen(iso) {
 // History authors carry only {id,name}; derive the SAME cursor color the person has live,
 // so a face in the timeline matches their caret/avatar in the editor.
 function authorUser(by) {
-  const name = (by && by.name) || "Sconosciuto";
+  const name = (by && by.name) || "Unknown";
   const { color } = colorFor((by && by.id) || name || "system");
   return { name, color };
 }
@@ -2170,6 +2435,7 @@ async function init() {
   filesMap = ydoc.getMap("files");
   metaMap = ydoc.getMap("meta");
   commentsMap = ydoc.getMap("comments");
+  chatArr = ydoc.getArray("chat");
   // The @mention roster (D2): everyone who has ever signed in. Best-effort — comments
   // work without it, you just don't get autocomplete.
   fetch("/api/users").then((r) => r.json()).then((d) => {
@@ -2186,6 +2452,7 @@ async function init() {
   filesMap.observe(onFilesChanged);
   metaMap.observe(onMetaChanged);
   commentsMap.observe(onCommentsChanged);
+  chatArr.observe(onChatChanged);
   noteNotSynced();
   // "connected" is the socket, not the doc — only `synced` means we actually have everyone's
   // work, so that's what flips us to online (see onSynced).
@@ -2206,6 +2473,17 @@ async function init() {
   });
   $("tabPdf").addEventListener("click", () => showTab("pdf"));
   $("tabLog").addEventListener("click", () => showTab("log"));
+  // Side panels (giro 5): the icon rail swaps what the left column shows.
+  $("railFiles").addEventListener("click", () => setSidePanel("files"));
+  $("railReview").addEventListener("click", () => setSidePanel("review"));
+  $("railChat").addEventListener("click", () => setSidePanel("chat"));
+  $("revTabOpen").addEventListener("click", () => { reviewFilter = "open"; renderReviewPanel(); });
+  $("revTabResolved").addEventListener("click", () => { reviewFilter = "resolved"; renderReviewPanel(); });
+  $("chatSend").addEventListener("click", sendChat);
+  $("chatInput").addEventListener("input", autoGrowChatInput);
+  $("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
   $("history").addEventListener("click", openHistory);
   $("histClose").addEventListener("click", closeHistory);
   $("histCheckpoint").addEventListener("click", checkpointNow);
