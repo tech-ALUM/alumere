@@ -8,7 +8,7 @@
 try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")document.documentElement.dataset.appTheme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
 </head>
-<body class="archive-body">
+<body class="home-body">
   <header class="topbar">
     <div class="brand">
       <span class="logo">∑</span>
@@ -16,9 +16,6 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <span class="tag">draft</span>
     </div>
     <div class="toolbar">
-      <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
-      <button id="newProjBtn" class="btn primary"><span class="ic">＋</span> Nuovo progetto</button>
-      <button id="uploadBtn" class="btn" title="Crea un progetto da un archivio .zip esistente"><span class="ic">⬆</span> Carica .zip</button>
       <div class="menu" id="settingsMenu">
         <button id="settingsBtn" class="btn" title="Impostazioni (aspetto)" aria-haspopup="true">⚙</button>
         <div class="menu-pop" hidden>
@@ -35,17 +32,61 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     </div>
   </header>
 
-  <main class="archive">
-    <div class="archive-head">
-      <h1>Progetti</h1>
-      <p class="sub">Libreria condivisa — i progetti restano sul server, disponibili a tutti.</p>
-    </div>
-    <div id="grid" class="proj-grid"></div>
-    <div id="empty" class="proj-empty hidden">
-      <p>Nessun progetto ancora.</p>
-      <p class="muted">Crea un <b>nuovo progetto</b> o carica un archivio <b>.zip</b> di un progetto LaTeX.</p>
-    </div>
-  </main>
+  <div class="home">
+    <aside class="home-side">
+      <input id="zipInput" type="file" accept=".zip,application/zip" hidden />
+      <div class="menu newproj" id="newProjMenu">
+        <button id="newProjBtn" class="btn primary block" aria-haspopup="true">
+          <span class="ic">＋</span> Nuovo progetto <span class="caret">▾</span>
+        </button>
+        <div class="menu-pop" hidden>
+          <button class="menu-item" id="npEmpty"><span class="menu-ic">📄</span> Progetto vuoto</button>
+          <button class="menu-item" id="npTemplate" disabled title="Presto — prima scriviamo i template">
+            <span class="menu-ic">📐</span> Da template <span class="soon">presto</span>
+          </button>
+          <button class="menu-item" id="npUpload"><span class="menu-ic">⬆</span> Carica progetto (.zip)</button>
+        </div>
+      </div>
+
+      <nav class="side-nav" id="sideNav">
+        <button class="side-item active" data-view="all">
+          <span class="side-ic">🗂</span> Tutti i progetti
+          <span class="side-count" id="countAll"></span>
+        </button>
+        <button class="side-item" data-view="archived">
+          <span class="side-ic">🗄</span> Archiviati
+          <span class="side-count" id="countArch"></span>
+        </button>
+      </nav>
+      <div class="side-tags" id="sideTags"></div>
+    </aside>
+
+    <main class="home-main">
+      <div class="home-main-head">
+        <h1 id="viewTitle">Tutti i progetti</h1>
+        <div class="search">
+          <span class="search-ic">🔎</span>
+          <input id="search" type="search" placeholder="Cerca progetto…" autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+
+      <div id="list" class="proj-list">
+        <div class="proj-list-head">
+          <span class="c-title">Titolo</span>
+          <span class="c-owner">Proprietario</span>
+          <span class="c-mod">Ultima modifica</span>
+          <span class="c-actions">Azioni</span>
+        </div>
+        <div id="rows"></div>
+      </div>
+
+      <div id="empty" class="proj-empty hidden">
+        <p>Nessun progetto ancora.</p>
+        <p class="muted">Crea un <b>nuovo progetto</b> o carica un archivio <b>.zip</b> di un progetto LaTeX.</p>
+      </div>
+      <div id="listFoot" class="list-foot"></div>
+    </main>
+  </div>
 
   <script src="auth.js"></script>
   <script src="theme.js"></script>

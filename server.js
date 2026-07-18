@@ -398,7 +398,9 @@ async function pruneOrphans(id, index, candidateShas) {
 
 // Record one version from the current file tree. Coalesces same-author bursts by amending
 // the last version; forceNew (restore / checkpoint / first-seed) always cuts a fresh,
-// non-amendable one. No-op when nothing has changed since the last version.
+// non-amendable one. Returns the version id when it actually recorded a change (new or
+// amend), or null when nothing changed since the last version (so the caller can tell a
+// substantive save from a content-less one).
 async function recordVersion(id, files, by, { kind = "auto", label = null, forceNew = false } = {}) {
   return withHistoryLock(id, async () => {
     const tree = await treeFromFiles(id, files);
@@ -406,7 +408,7 @@ async function recordVersion(id, files, by, { kind = "auto", label = null, force
     const th = treeHash(tree);
     const index = await readHistoryIndex(id);
     const last = index.versions[index.versions.length - 1];
-    if (last && last.treeHash === th && !forceNew) return last.id;   // genuinely unchanged
+    if (last && last.treeHash === th && !forceNew) return null;   // genuinely unchanged → no version, and no "modified" bump upstream
     const now = new Date().toISOString();
     const amendable = !forceNew && kind === "auto" && last && last.kind === "auto" && !last.label
       && last.by && by && last.by.id === by.id
@@ -734,6 +736,148 @@ app.post("/api/projects/upload", requireUser, async (req, res) => {
   }
 });
 
+// ---------- download / export / archive ----------
+// Download the project sources as a .zip (the files/ tree, as it sits on disk).
+app.get("/api/projects/:id/download", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  if (!(await readMeta(id))) return res.status(404).json({ ok: false, error: "not found" });
+  try {
+    const zip = new AdmZip();
+    zip.addLocalFolder(filesDir(id));
+    res.type("application/zip").send(zip.toBuffer());
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Compile the project from disk and stream the PDF. Note: files/ trails the live Yjs doc by
+// the store debounce (a few seconds), so this is the last SAVED state — right for a library
+// download, not the very last keystroke. The home has no editor context, so the main .tex is
+// picked heuristically: main.tex → any file with \documentclass → shallowest .tex.
+function pickMainTex(files) {
+  const tex = files.filter((f) => /\.tex$/i.test(f.path) && f.encoding !== "base64");
+  if (!tex.length) return null;
+  const root = tex.find((f) => f.path.toLowerCase() === "main.tex");
+  if (root) return root.path;
+  const byDepth = (arr) => arr.slice().sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path));
+  const withClass = tex.filter((f) => /\\documentclass/.test(f.content || ""));
+  return byDepth(withClass.length ? withClass : tex)[0].path;
+}
+app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  if (!(await readMeta(id))) return res.status(404).json({ ok: false, error: "not found" });
+  let dir;
+  try {
+    const files = await readFilesFlat(filesDir(id));
+    const mainRel = pickMainTex(files);
+    if (!mainRel) return res.status(400).json({ ok: false, error: "Nessun file .tex nel progetto." });
+    dir = await mkdtemp(path.join(os.tmpdir(), "alumere-"));
+    for (const f of files) {
+      const rel = safeRelPath(f.path || "");
+      if (!rel) continue;
+      const dest = path.join(dir, rel);
+      await mkdir(path.dirname(dest), { recursive: true });
+      if (f.encoding === "base64") await writeFile(dest, Buffer.from(f.content || "", "base64"));
+      else await writeFile(dest, f.content ?? "", "utf8");
+    }
+    const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG.xelatex);
+    const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
+    if (!existsSync(pdfPath)) return res.status(422).json({ ok: false, error: "Compilazione fallita — apri il progetto nell'editor per i dettagli.", code });
+    res.type("application/pdf").send(await readFile(pdfPath));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// Archive / unarchive: a shared flag on meta (the whole library sees it). Doesn't touch
+// updatedAt/By — archiving isn't a content edit. The list endpoint returns the flag; the
+// client filters "Tutti i progetti" vs "Archiviati".
+app.post("/api/projects/:id/archive", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  try {
+    meta.archived = !!(req.body || {}).archived;
+    await writeMeta(id, meta);
+    res.json({ ok: true, archived: meta.archived });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ---------- tags (shared, global) ----------
+// A flat registry in PROJECTS_DIR/tags.json ([{ id, name, color }]); each project's meta
+// carries tags:[id]. Tags are SHARED — the whole library sees the same set, no per-user
+// state. Colours come from a fixed palette so the dots stay legible in light and dark.
+const TAGS_FILE = path.join(PROJECTS_DIR, "tags.json");
+const TAG_COLORS = ["#7eb0d5", "#bd7ebe", "#8bd450", "#ffb55a", "#fd7f6f", "#e879b9", "#5ec8c0", "#9a8cff"];
+let tagsChain = Promise.resolve();                                  // serialize tags.json read-modify-write
+const withTagsLock = (fn) => { const r = tagsChain.then(fn, fn); tagsChain = r.catch(() => {}); return r; };
+async function readTags() {
+  try { const j = JSON.parse(await readFile(TAGS_FILE, "utf8")); return Array.isArray(j.tags) ? j.tags : []; }
+  catch { return []; }
+}
+async function writeTags(tags) {
+  await mkdir(PROJECTS_DIR, { recursive: true });
+  await writeFile(TAGS_FILE, JSON.stringify({ tags }, null, 2), "utf8");
+}
+
+app.get("/api/tags", requireUser, async (_req, res) => {
+  try { res.json({ ok: true, tags: await readTags() }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post("/api/tags", requireUser, async (req, res) => {
+  const name = String((req.body || {}).name || "").trim().slice(0, 40);
+  let color = String((req.body || {}).color || "");
+  if (!name) return res.status(400).json({ ok: false, error: "Serve un nome per il tag." });
+  if (!TAG_COLORS.includes(color)) color = TAG_COLORS[0];
+  try {
+    const tag = await withTagsLock(async () => {
+      const tags = await readTags();
+      if (tags.some((t) => t.name.toLowerCase() === name.toLowerCase())) throw new Error("Esiste già un tag con questo nome.");
+      const t = { id: crypto.randomUUID(), name, color };
+      tags.push(t);
+      await writeTags(tags);
+      return t;
+    });
+    res.json({ ok: true, tag });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+// Delete a tag from the registry AND from every project that carries it (shared cleanup).
+app.delete("/api/tags/:id", requireUser, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await withTagsLock(async () => writeTags((await readTags()).filter((t) => t.id !== id)));
+    const dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory());
+    for (const d of dirs) {
+      if (!validId(d.name)) continue;
+      const meta = await readMeta(d.name);
+      if (meta && Array.isArray(meta.tags) && meta.tags.includes(id)) {
+        meta.tags = meta.tags.filter((t) => t !== id);
+        await writeMeta(d.name, meta);
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Set a project's tags (whole array). Unknown ids are dropped. Not a content edit, so it
+// leaves updatedAt/By alone (like archiving).
+app.put("/api/projects/:id/tags", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  const wanted = Array.isArray((req.body || {}).tags) ? req.body.tags.map(String) : [];
+  const known = new Set((await readTags()).map((t) => t.id));
+  meta.tags = [...new Set(wanted.filter((t) => known.has(t)))];
+  try { await writeMeta(id, meta); res.json({ ok: true, tags: meta.tags }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ---------- history endpoints (M2) ----------
 // Read-only browse of the timeline + per-file contents at a version, plus label edits.
 // RESTORE is done CLIENT-side through the live Yjs doc (see app.js): the client pulls a
@@ -958,9 +1102,6 @@ async function attachCollab(httpServer) {
     }
     if (!files.length) { console.warn(`[alumere] collab store skipped for "${documentName}" (doc empty)`); return; }
     await writeFiles(documentName, files);
-    meta.updatedAt = new Date().toISOString();
-    const ub = document.getMap(COLLAB_META_KEY).get("updatedBy");
-    if (ub && ub.id && ub.name) meta.updatedBy = { id: String(ub.id), name: String(ub.name) };
     // History: this same debounced save is our version boundary. A restore or explicit
     // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
     // version; we remember the last nonce we acted on in meta.json, so the flag needs no
@@ -968,22 +1109,34 @@ async function attachCollab(httpServer) {
     // The break is { nonce, kind, label?, by? } — kind/label/by shape the forced version
     // (a checkpoint is authored by whoever cut it, not by the last editor). Bare-string
     // nonces from clients on older code still force a version, as before.
+    const ub = document.getMap(COLLAB_META_KEY).get("updatedBy");
+    const editor = ub && ub.id && ub.name ? { id: String(ub.id), name: String(ub.name) } : null;
     const brkRaw = document.getMap(COLLAB_META_KEY).get("historyBreak");
     const brk = brkRaw == null ? null
       : (typeof brkRaw === "object" ? brkRaw : { nonce: String(brkRaw) });
     const forceNew = !!brk && brk.nonce != null && brk.nonce !== meta.lastHistoryBreak;
-    let vBy = meta.updatedBy || meta.createdBy || SYSTEM_USER;
+    let vBy = editor || meta.updatedBy || meta.createdBy || SYSTEM_USER;
     const vOpts = { forceNew };
     if (forceNew) {
       vOpts.kind = brk.kind === "checkpoint" ? "checkpoint" : "restore";
       if (typeof brk.label === "string" && brk.label.trim()) vOpts.label = brk.label.trim().slice(0, 120);
       if (brk.by && brk.by.id && brk.by.name) vBy = { id: String(brk.by.id), name: String(brk.by.name) };
     }
-    await recordVersion(documentName, files, vBy, vOpts)
-      .catch((e) => console.warn(`[alumere] history record failed for "${documentName}": ${e.message}`));
-    if (forceNew) meta.lastHistoryBreak = brk.nonce;
-    await writeMeta(documentName, meta);
-    console.log(`[alumere] collab stored "${documentName}" (${files.length} files)`);
+    // Bump "ultima modifica" ONLY on a substantive change: recordVersion returns the version
+    // id when it recorded something (new or amend) and null on a content-less save (reconnect,
+    // reopen, redeploy re-materializes identical files). Otherwise the home would show activity
+    // nobody performed, and drift ahead of the newest entry in the history timeline.
+    const versionId = await recordVersion(documentName, files, vBy, vOpts)
+      .catch((e) => { console.warn(`[alumere] history record failed for "${documentName}": ${e.message}`); return null; });
+    let dirty = false;
+    if (versionId) {
+      meta.updatedAt = new Date().toISOString();
+      if (editor) meta.updatedBy = editor;
+      dirty = true;
+    }
+    if (forceNew) { meta.lastHistoryBreak = brk.nonce; dirty = true; }
+    if (dirty) await writeMeta(documentName, meta);
+    console.log(`[alumere] collab stored "${documentName}" (${files.length} files${versionId ? "" : ", no change"})`);
   }
 
   const config = { debounce: 2000, maxDebounce: 10000, onLoadDocument, onStoreDocument };
