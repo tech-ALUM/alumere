@@ -357,6 +357,7 @@ function onFilesChanged() {
     currentPath = null;
     if (view) { view.destroy(); view = null; }
     closeCommentOverlays();
+    closeSpellMenu();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
   }
   renderTabs();
@@ -467,6 +468,7 @@ function closeTab(path) {
     currentPath = null;
     if (view) { view.destroy(); view = null; }
     closeCommentOverlays();
+    closeSpellMenu();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
     renderTree();
   }
@@ -479,12 +481,14 @@ function closeTab(path) {
 // a file's content can never leak into another file's Y.Text.
 function openFile(path) {
   if (!hasPath(path)) return;
+  revealEditor();                    // opening a file while the editor pane is collapsed
   const val = filesMap.get(path);
   currentPath = path;
   if (!openTabs.includes(path)) openTabs.push(path);
   updateEditorEmpty();               // un-hide the host before CM measures it
   if (view) { view.destroy(); view = null; }
   closeCommentOverlays();            // overlays are anchored to the old view's coordinates
+  closeSpellMenu();                  // ditto for the spell menu
   const { EditorView, keymap } = CM.view;
   const { EditorState } = CM.state;
   let state;
@@ -500,6 +504,7 @@ function openFile(path) {
         yCollab(val, provider.awareness, { undoManager }),
         keymap.of(yUndoManagerKeymap),
         ...commentExtensions(),
+        ...spellExtensions(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some((tr) => tr.isUserEvent("input") || tr.isUserEvent("delete"))) noteLocalEdit();
         }),
@@ -508,6 +513,7 @@ function openFile(path) {
   }
   view = new EditorView({ state, parent: editorHost });
   refreshCommentDecos();             // paint this file's comment highlights (no-op on binary)
+  scheduleSpellcheck(300);           // first spell pass for the freshly opened file
   view.scrollDOM.addEventListener("scroll", repositionOverlays, { passive: true });
   try { provider.awareness.setLocalStateField("activeFile", path); } catch {}
   renderTree();
@@ -590,6 +596,7 @@ function parseLatexLog(log) {
 // Move the editor to file:line (used by the problem rows). openFile is synchronous, so the
 // fresh view is ready to receive the selection right after the switch.
 function gotoIssue(file, line) {
+  revealEditor();                    // the jump target must be visible (openFile also does this)
   if (file && hasPath(file) && currentPath !== file) openFile(file);
   if (!view || !line || (file && !hasPath(file))) return;
   const doc = view.state.doc;
@@ -1478,6 +1485,262 @@ function commentExtensions() {
   ];
 }
 
+// ---------- Spellcheck (giro 6): IT+EN dictionaries · red dots · right-click fixes ----------
+// The hunspell heavy lifting (parse + lookup + suggest) lives in spell-worker.js, off the
+// UI thread. Here: tokenize the open file, skip everything that isn't prose (commands,
+// code-like arguments, math, comments), underline unknown words via a CM6 decoration
+// field (it live-maps through edits, exactly like the comment highlights), and serve a
+// right-click menu with suggestions + "Add to project dictionary". The custom words are
+// an Y.Array("dict") in the shared doc — live for every peer, persisted as dictionary.json.
+let spellWorker = null, spellBroken = false;
+const spellCache = new Map();        // token → true (known) / false (unknown); spans files
+const spellPending = new Map();      // check-request id → the words it asked about
+const suggestCallbacks = new Map();  // suggest-request id → callback
+let dictArr = null;                  // Y.Array("dict") — the project's custom dictionary
+let projectDict = new Set();         // lowercased mirror of dictArr for O(1) lookups
+let spellField = null, setSpellEffect = null;
+let spellTimer = null, spellSeq = 0;
+let spellMenuEl = null;              // right-click popover (lazy singleton)
+
+function spellSupported() { return commentsSupported() && typeof Worker !== "undefined"; }
+
+function ensureSpellWorker() {
+  if (spellWorker || spellBroken || !spellSupported()) return spellWorker;
+  try { spellWorker = new Worker("spell-worker.js"); }
+  catch (e) { console.warn("[alumere] spellcheck off:", e); spellBroken = true; return null; }
+  // Dictionaries missing/broken → spellcheck goes silently dark, the editor lives on
+  // (same posture as comments without the bundle).
+  spellWorker.onerror = (e) => {
+    console.warn("[alumere] spellcheck worker failed — spellcheck disabled:", (e && e.message) || e);
+    spellBroken = true;
+    try { spellWorker.terminate(); } catch {}
+    spellWorker = null;
+  };
+  spellWorker.onmessage = (e) => {
+    const m = e.data || {};
+    if (m.type === "dead") {              // dictionaries failed to load inside the worker
+      console.warn("[alumere] spellcheck disabled:", m.error);
+      spellBroken = true;
+      try { spellWorker.terminate(); } catch {}
+      spellWorker = null;
+      return;
+    }
+    if (m.type === "checked") {
+      const asked = spellPending.get(m.id);
+      spellPending.delete(m.id);
+      if (!asked) return;
+      const bad = new Set(m.unknown || []);
+      for (const w of asked) spellCache.set(w, !bad.has(w));
+      if (bad.size) runSpellcheck();          // fresh positions — the doc may have moved meanwhile
+    } else if (m.type === "suggested") {
+      const cb = suggestCallbacks.get(m.id);
+      suggestCallbacks.delete(m.id);
+      if (cb) cb(m.suggestions || []);
+    }
+  };
+  return spellWorker;
+}
+
+function ensureSpellField() {
+  if (spellField || !spellSupported()) return;
+  const { StateField, StateEffect } = CM.state;
+  const { EditorView, Decoration } = CM.view;
+  setSpellEffect = StateEffect.define();
+  const build = (ranges) => Decoration.set(
+    ranges.filter((r) => r.from < r.to)
+      .map((r) => Decoration.mark({ class: "cm-spell-err", spell: true }).range(r.from, r.to)),
+    true);
+  spellField = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      deco = deco.map(tr.changes);
+      for (const e of tr.effects) if (e.is(setSpellEffect)) deco = build(e.value);
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+// Stretches of the source that are NOT prose and must never be spellchecked:
+// comments, math, \commands, and the {arguments} of code-like commands (labels,
+// cite keys, paths, package names — plus \href's URL).
+const SPELL_ARG_CMDS = /\\(begin|end|usepackage|documentclass|label|ref|eqref|pageref|autoref|nameref|cite[a-zA-Z]*|input|include|includeonly|includegraphics|bibliography|bibliographystyle|url|href|hypersetup|verb)\s*(\[[^\]\n]*\])?\s*\{[^}\n]*\}/g;
+function spellExcludedRanges(text) {
+  const out = [];
+  for (const m of text.matchAll(/(^|[^\\])%[^\n]*/g)) out.push([m.index + m[1].length, m.index + m[0].length]);
+  for (const m of text.matchAll(/\$\$[\s\S]{0,2000}?\$\$|\$[^$\n]{0,500}\$|\\\[[\s\S]{0,2000}?\\\]|\\\([\s\S]{0,500}?\\\)/g)) out.push([m.index, m.index + m[0].length]);
+  for (const m of text.matchAll(SPELL_ARG_CMDS)) out.push([m.index, m.index + m[0].length]);
+  for (const m of text.matchAll(/\\[a-zA-Z@]+\*?/g)) out.push([m.index, m.index + m[0].length]);
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+function runSpellcheck() {
+  if (!view || !currentPath || !spellField) return;
+  if (view.state.field(spellField, false) === undefined) return;    // binary/read-only view
+  const text = view.state.doc.toString();
+  if (text.length > 500000) { view.dispatch({ effects: setSpellEffect.of([]) }); return; }  // pathological file
+  const excl = spellExcludedRanges(text);
+  const selHead = view.hasFocus ? view.state.selection.main.head : -1;
+  const bad = [], ask = new Set();
+  let ei = 0;
+  for (const m of text.matchAll(/[\p{L}][\p{L}'’]*/gu)) {
+    const from = m.index, to = from + m[0].length, word = m[0];
+    if (word.length < 2) continue;
+    while (ei < excl.length && excl[ei][1] <= from) ei++;
+    // Skip anything overlapping an excluded stretch. `ei` only moves forward: both the
+    // tokens and the ranges are in document order.
+    let inMask = false;
+    for (let j = ei; j < excl.length && excl[j][0] < to; j++) if (excl[j][1] > from) { inMask = true; break; }
+    if (inMask) continue;
+    if (from <= selHead && selHead <= to) continue;                 // the word being typed right now
+    if (projectDict.has(word.replace(/’/g, "'").toLowerCase())) continue;
+    const known = spellCache.get(word);
+    if (known === false) bad.push({ from, to });
+    else if (known === undefined) ask.add(word);
+  }
+  view.dispatch({ effects: setSpellEffect.of(bad) });
+  const w = ask.size ? ensureSpellWorker() : null;
+  if (w) {
+    const id = ++spellSeq, words = [...ask];
+    spellPending.set(id, words);
+    w.postMessage({ type: "check", id, words });
+  }
+}
+function scheduleSpellcheck(delay = 500) {
+  if (!spellSupported()) return;
+  clearTimeout(spellTimer);
+  spellTimer = setTimeout(runSpellcheck, delay);
+}
+
+// ---- right-click menu: suggestions + add-to-dictionary ----
+function ensureSpellMenu() {
+  if (spellMenuEl) return spellMenuEl;
+  spellMenuEl = document.createElement("div");
+  spellMenuEl.className = "spell-menu";
+  spellMenuEl.hidden = true;
+  document.body.appendChild(spellMenuEl);
+  document.addEventListener("mousedown", (e) => {
+    if (!spellMenuEl.hidden && !spellMenuEl.contains(e.target)) closeSpellMenu();
+  });
+  return spellMenuEl;
+}
+function closeSpellMenu() {
+  if (spellMenuEl) { spellMenuEl.hidden = true; spellMenuEl.innerHTML = ""; }
+}
+
+function spellRangeAt(pos) {
+  const f = view && spellField && view.state.field(spellField, false);
+  if (!f) return null;
+  let hit = null;
+  f.between(pos, pos, (from, to) => { hit = { from, to, word: view.state.sliceDoc(from, to) }; return false; });
+  return hit;
+}
+
+function applySpellFix(hit, replacement) {
+  if (!view) return;
+  // A live collab doc can move under an open menu: replace only if the word is still there.
+  if (view.state.sliceDoc(hit.from, hit.to) !== hit.word) return;
+  view.dispatch({
+    changes: { from: hit.from, to: hit.to, insert: replacement },
+    selection: { anchor: hit.from + replacement.length },
+    userEvent: "input.spell",
+  });
+  view.focus();
+}
+
+function addToProjectDict(word) {
+  if (!dictArr) return;
+  const w = String(word).replace(/’/g, "'").trim();
+  if (!w || projectDict.has(w.toLowerCase())) return;
+  dictArr.push([w]);          // the observer repaints every peer (and the server persists)
+}
+function onDictChanged() {
+  projectDict = new Set(dictArr.toArray()
+    .filter((x) => typeof x === "string")
+    .map((s) => s.replace(/’/g, "'").toLowerCase()));
+  scheduleSpellcheck(0);
+}
+
+function openSpellMenu(hit, x, y) {
+  const el = ensureSpellMenu();
+  el.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "spell-menu-word";
+  head.textContent = hit.word;
+  const list = document.createElement("div");
+  const wait = document.createElement("div");
+  wait.className = "spell-menu-empty";
+  wait.textContent = "Looking for suggestions…";
+  list.appendChild(wait);
+  const sep = document.createElement("div");
+  sep.className = "spell-menu-sep";
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "spell-menu-item spell-menu-add";
+  add.textContent = `Add “${hit.word}” to the project dictionary`;
+  add.addEventListener("click", () => { addToProjectDict(hit.word); closeSpellMenu(); });
+  el.append(head, list, sep, add);
+  el.hidden = false;
+  const place = () => {
+    el.style.left = Math.max(8, Math.min(x, innerWidth - el.offsetWidth - 8)) + "px";
+    el.style.top = Math.max(8, Math.min(y + 4, innerHeight - el.offsetHeight - 8)) + "px";
+  };
+  place();
+  requestSuggestions(hit.word, (suggestions) => {
+    if (el.hidden || !el.contains(list)) return;        // closed (or reopened elsewhere) meanwhile
+    list.innerHTML = "";
+    // Mirror the word's capitalisation: "Wehn" should propose "When", not "when".
+    const cased = suggestions.map((s) => (/^\p{Lu}/u.test(hit.word) && /^\p{Ll}/u.test(s)) ? s[0].toUpperCase() + s.slice(1) : s);
+    if (!cased.length) {
+      const none = document.createElement("div");
+      none.className = "spell-menu-empty";
+      none.textContent = "No suggestions";
+      list.appendChild(none);
+    }
+    for (const s of cased) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "spell-menu-item spell-menu-sugg";
+      b.textContent = s;
+      b.addEventListener("click", () => { applySpellFix(hit, s); closeSpellMenu(); });
+      list.appendChild(b);
+    }
+    place();
+  });
+}
+function requestSuggestions(word, cb) {
+  const w = ensureSpellWorker();
+  if (!w) { cb([]); return; }
+  const id = ++spellSeq;
+  suggestCallbacks.set(id, cb);
+  w.postMessage({ type: "suggest", id, word });
+}
+
+// The editor extensions for a text file: underline field + context menu + re-check triggers.
+function spellExtensions() {
+  ensureSpellField();
+  if (!spellField) return [];
+  const { EditorView } = CM.view;
+  return [
+    spellField,
+    EditorView.domEventHandlers({
+      contextmenu: (e, v) => {
+        const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos == null) return false;
+        const hit = spellRangeAt(pos);
+        if (!hit) return false;                          // not on a flagged word → native menu
+        e.preventDefault();
+        openSpellMenu(hit, e.clientX, e.clientY);
+        return true;
+      },
+    }),
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged) { closeSpellMenu(); scheduleSpellcheck(600); }
+      else if (u.selectionSet) scheduleSpellcheck(400);  // re-check the word the cursor just left
+    }),
+  ];
+}
+
 // ---------- Side panels (giro 5): icon rail — Files · Review · Chat ----------
 // One panel occupies the left column at a time (the hidden ones leave the grid, see CSS).
 // Review lists EVERY thread of the project — open, resolved, orphaned — with jump/reply/
@@ -1526,6 +1789,7 @@ function threadState(th) {
 // Jump from a review card to the thread's place in the source (cross-file, like gotoIssue).
 function gotoThread(th) {
   if (!hasPath(th.path)) return;
+  revealEditor();
   if (currentPath !== th.path) openFile(th.path);
   if (!view) return;
   const r = resolveAnchor(view.state.doc.toString(), th.anchor);
@@ -1734,11 +1998,39 @@ function autoGrowChatInput() {
 
 // ---------- Splitters ----------
 let filesW = 248, editorFrac = 0.5;
+let collapsedPane = null;   // null | "editor" | "preview" — mid-bar chevrons (Overleaf-style)
 const workspace = document.querySelector(".workspace");
-function applyLayout() { workspace.style.gridTemplateColumns = `46px ${filesW}px 6px ${editorFrac}fr 6px ${1 - editorFrac}fr`; }
+function applyLayout() {
+  // A collapsed pane keeps its grid track (display:none would shift the columns after it)
+  // but the track goes to 0 and the pane turns invisible via CSS (data-collapsed below).
+  const ed = collapsedPane === "editor" ? "0px" : collapsedPane === "preview" ? "1fr" : `${editorFrac}fr`;
+  const pv = collapsedPane === "preview" ? "0px" : collapsedPane === "editor" ? "1fr" : `${1 - editorFrac}fr`;
+  workspace.style.gridTemplateColumns = `46px ${filesW}px 6px ${ed} 6px ${pv}`;
+  if (collapsedPane) workspace.dataset.collapsed = collapsedPane;
+  else delete workspace.dataset.collapsed;
+  // Only the restoring chevron survives a collapse: › always moves the divider right,
+  // ‹ always moves it left, so their meaning never flips — just their titles.
+  const right = $("collapsePdf"), left = $("collapseEditor");
+  if (right && left) {
+    right.hidden = collapsedPane === "preview";
+    left.hidden = collapsedPane === "editor";
+    right.title = collapsedPane === "editor" ? "Show the editor again" : "Hide the PDF — editor only";
+    left.title = collapsedPane === "preview" ? "Show the PDF again" : "Hide the editor — PDF only";
+  }
+}
+function setCollapsed(which) {
+  collapsedPane = which;
+  if (which === "editor") closeCommentOverlays();   // fixed-position popovers would linger over the PDF
+  applyLayout();
+  if (view) view.requestMeasure();                  // re-measure after the width jump (PDF re-fits via its ResizeObserver)
+}
+// Anything that lands the user in the source (tree click, error row, review card, inverse
+// search) must bring a collapsed editor back, or the jump would be invisible.
+function revealEditor() { if (collapsedPane === "editor") setCollapsed(null); }
 function setupSplitters() {
   document.querySelectorAll(".splitter").forEach((sp, i) => {
     sp.addEventListener("mousedown", (e) => {
+      if (i === 1 && collapsedPane) return;          // a collapsed divider is parked, not draggable
       e.preventDefault();
       const startX = e.clientX, startFilesW = filesW, startFrac = editorFrac;
       const avail = () => workspace.clientWidth - filesW - 12;
@@ -2436,6 +2728,7 @@ async function init() {
   metaMap = ydoc.getMap("meta");
   commentsMap = ydoc.getMap("comments");
   chatArr = ydoc.getArray("chat");
+  dictArr = ydoc.getArray("dict");     // project dictionary (giro 6): custom spellcheck words
   // The @mention roster (D2): everyone who has ever signed in. Best-effort — comments
   // work without it, you just don't get autocomplete.
   fetch("/api/users").then((r) => r.json()).then((d) => {
@@ -2453,6 +2746,8 @@ async function init() {
   metaMap.observe(onMetaChanged);
   commentsMap.observe(onCommentsChanged);
   chatArr.observe(onChatChanged);
+  dictArr.observe(onDictChanged);
+  ensureSpellWorker();               // prewarm: the dictionaries take a moment to parse
   noteNotSynced();
   // "connected" is the socket, not the doc — only `synced` means we actually have everyone's
   // work, so that's what flips us to online (see onSynced).
@@ -2493,8 +2788,13 @@ async function init() {
   $("syncForward").addEventListener("click", syncForward);
   // The arrow lives on the splitter: don't let pressing it start a pane drag.
   $("syncForward").addEventListener("mousedown", (e) => e.stopPropagation());
+  // Pane collapse chevrons (same divider): › = divider right, ‹ = divider left.
+  $("collapsePdf").addEventListener("click", () => setCollapsed(collapsedPane === "editor" ? null : "preview"));
+  $("collapseEditor").addEventListener("click", () => setCollapsed(collapsedPane === "preview" ? null : "editor"));
+  document.querySelectorAll(".collapse-btn").forEach((b) => b.addEventListener("mousedown", (e) => e.stopPropagation()));
   pagesEl.addEventListener("dblclick", onPdfDblClick);   // inverse search: PDF → source
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && spellMenuEl && !spellMenuEl.hidden) { closeSpellMenu(); return; }
     if (e.key === "Escape" && commentDom && !commentDom.pop.hidden) { closeCommentOverlays(); return; }
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }

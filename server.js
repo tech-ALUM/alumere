@@ -1179,6 +1179,15 @@ async function readChat(id) {
   try { const j = JSON.parse(await readFile(chatPath(id), "utf8")); return Array.isArray(j.messages) ? j.messages : []; }
   catch { return []; }
 }
+// Project dictionary (giro 6): the words added via the spellchecker's "Add to project
+// dictionary" — an Y.Array of strings in the same doc, persisted as dictionary.json
+// (same reasoning and same hooks as chat.json: not a source file).
+const COLLAB_DICT_KEY = "dict";
+const dictPath = (id) => path.join(projectDir(id), "dictionary.json");
+async function readDict(id) {
+  try { const j = JSON.parse(await readFile(dictPath(id), "utf8")); return Array.isArray(j.words) ? j.words : []; }
+  catch { return []; }
+}
 
 async function attachCollab(httpServer) {
   let serverMod, WebSocketServer, Y;
@@ -1224,6 +1233,12 @@ async function attachCollab(httpServer) {
       const messages = await readChat(documentName);
       if (messages.length) document.transact(() => chatArr.push(messages));
     }
+    // And the project dictionary (same posture).
+    const dictArr = document.getArray(COLLAB_DICT_KEY);
+    if (dictArr.length === 0) {
+      const words = await readDict(documentName);
+      if (words.length) document.transact(() => dictArr.push(words));
+    }
     console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
     // History: capture the on-disk starting point the first time this project is opened.
     await ensureBaseline(documentName, files, meta.createdBy || SYSTEM_USER)
@@ -1265,6 +1280,14 @@ async function attachCollab(httpServer) {
       const cur = await readFile(chatPath(documentName), "utf8").catch(() => null);
       if (cur !== next) await writeFile(chatPath(documentName), next, "utf8");
     } catch (e) { console.warn(`[alumere] chat store failed for "${documentName}": ${e.message}`); }
+    // Project dictionary: same only-if-changed posture (a dictionary-only save must not
+    // touch updatedAt or history either).
+    try {
+      const words = document.getArray(COLLAB_DICT_KEY).toArray().filter((w) => typeof w === "string");
+      const next = JSON.stringify({ words }, null, 2);
+      const cur = await readFile(dictPath(documentName), "utf8").catch(() => null);
+      if (cur !== next) await writeFile(dictPath(documentName), next, "utf8");
+    } catch (e) { console.warn(`[alumere] dictionary store failed for "${documentName}": ${e.message}`); }
     // History: this same debounced save is our version boundary. A restore or explicit
     // checkpoint bumps `historyBreak` in the shared meta map to force a fresh, non-amendable
     // version; we remember the last nonce we acted on in meta.json, so the flag needs no

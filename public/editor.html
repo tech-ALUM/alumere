@@ -140,6 +140,17 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
               title="Show the cursor's line in the PDF (double-click the PDF to jump back to the source)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg>
       </button>
+      <!-- Pane collapse (mid-bar chevrons): › pushes the divider right (hide the PDF, or
+           bring the editor back), ‹ pushes it left (hide the editor, or bring the PDF back).
+           While a pane is collapsed only the restoring chevron stays visible. -->
+      <div class="pane-collapse">
+        <button id="collapsePdf" class="collapse-btn" type="button" title="Hide the PDF — editor only">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l4.5 5L6 13"/></svg>
+        </button>
+        <button id="collapseEditor" class="collapse-btn" type="button" title="Hide the editor — PDF only">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5.5 8 10 13"/></svg>
+        </button>
+      </div>
     </div>
 
     <section class="pane preview" id="previewPane">

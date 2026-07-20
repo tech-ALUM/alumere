@@ -324,9 +324,20 @@ body[data-conn="offline"] .offline-bar { display: flex; }
    selecting (the active line). A tint lets the selection show through. */
 .cm-activeLine { background: rgba(126, 176, 213, .14) !important; }
 .cm-activeLineGutter { background: #e3eef8 !important; }
-.cm-tooltip-autocomplete { font-family: var(--mono) !important; font-size: 12.5px; border-radius: 8px !important; border: 1px solid var(--line) !important; box-shadow: 0 8px 28px rgba(0,0,0,.14) !important; }
+/* CM6 tooltips (autocomplete above all) float over the EDITOR surface, so they follow the
+   editor palette (--ed-*), not the app chrome: CM's default light background + the dark app
+   theme's light-gray --muted text made the popup unreadable in dark. */
+.cm-tooltip {
+  background: var(--ed-bg) !important; color: var(--ed-fg) !important;
+  border: 1px solid color-mix(in srgb, var(--ed-fg) 20%, var(--ed-bg)) !important;
+}
+.cm-tooltip-autocomplete { font-family: var(--mono) !important; font-size: 12.5px; border-radius: 8px !important; box-shadow: 0 8px 28px rgba(0,0,0,.14) !important; }
+.cm-tooltip-autocomplete ul li { color: var(--ed-fg); }
 .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: var(--accent-ink) !important; }
-.cm-completionDetail { color: var(--muted); font-style: normal; margin-left: 8px; }
+.cm-completionDetail { color: color-mix(in srgb, var(--ed-fg) 55%, var(--ed-bg)); font-style: italic; margin-left: 8px; }
+.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail { color: var(--accent-ink); opacity: .75; }
+.cm-completionMatchedText { text-decoration: none; font-weight: 700; color: var(--ed-cursor); }
+.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionMatchedText { color: var(--accent-ink); }
 .cm-completionIcon { opacity: .7; }
 
 /* ---------- Preview ---------- */
@@ -422,6 +433,29 @@ body.dragging .pdf-scroll { pointer-events: none; }
 }
 .sync-jump:hover { background: var(--accent-soft); color: var(--accent-d); border-color: var(--accent-d); }
 .sync-jump.hidden { display: none; }
+
+/* Pane-collapse chevrons at mid-bar (the SyncTeX arrow rides higher, at 25%):
+   › hides the PDF, ‹ hides the editor; the survivor restores the split. */
+.pane-collapse {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; gap: 4px; z-index: 5;
+}
+.collapse-btn {
+  width: 24px; height: 30px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); color: var(--muted);
+  cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+}
+.collapse-btn:hover { background: var(--accent-soft); color: var(--accent-d); border-color: var(--accent-d); }
+.collapse-btn[hidden] { display: none; }   /* display:grid above beats [hidden] — fifth sighting */
+/* While a pane is collapsed: its 0px track would still paint the pane's own borders, so the
+   pane goes fully invisible; the divider is parked (no drag, no hover highlight); the SyncTeX
+   arrow makes no sense with one side gone. */
+.workspace[data-collapsed="editor"] .pane.editor,
+.workspace[data-collapsed="preview"] .pane.preview { visibility: hidden; border: 0; }
+.workspace[data-collapsed] .splitter[data-target="editorPane"] { cursor: default; }
+.workspace[data-collapsed] .splitter[data-target="editorPane"]:hover::after { background: var(--line); }
+.workspace[data-collapsed] .sync-jump { display: none; }
 
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
@@ -940,6 +974,40 @@ body[data-editor-theme="nord"]{
 .mention-item .muted { font-size: 11.5px; }
 .mention-item:hover, .mention-item.sel { background: var(--accent-soft); }
 .mention { color: var(--accent-d); font-weight: 600; }
+
+/* ---------- Spellcheck (giro 6): red dots under unknown words + right-click menu ---------- */
+/* Classic spellcheck dots. This red reads on every editor palette, light and dark. */
+.cm-spell-err {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #e5484d;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+}
+.spell-menu {
+  position: fixed; z-index: 72; min-width: 200px; max-width: 300px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22); padding: 6px;
+  display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink);
+}
+.spell-menu[hidden] { display: none; }   /* the flex above beats [hidden] — the usual trap */
+.spell-menu-word {
+  font: 600 12px var(--mono); color: var(--muted); padding: 4px 8px 7px;
+  border-bottom: 1px solid var(--line); margin-bottom: 4px;
+  text-decoration: underline dotted #e5484d; text-underline-offset: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.spell-menu-item {
+  display: block; width: 100%; text-align: left; padding: 6px 8px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--ink);
+  font: 13px/1.4 'Inter', sans-serif;
+}
+.spell-menu-item:hover { background: var(--accent-soft); }
+.spell-menu-sugg { font-weight: 600; }
+.spell-menu-empty { padding: 6px 8px; color: var(--muted); font-size: 12px; }
+.spell-menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+.spell-menu-add { color: var(--accent-d); font-size: 12.5px; }
 
 /* ---------- Review panel (giro 5): all the project's comment threads ---------- */
 .review-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
