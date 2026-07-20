@@ -365,18 +365,33 @@ function onFilesChanged() {
 }
 
 // ---------- Editor (CodeMirror bound to the active file's Y.Text) ----------
+// Prefix-only matching (filter: false disables CM6's fuzzy filter, which would
+// surface "\subsection" for "\be"). No validFor: the source re-runs per keystroke
+// so the manual filter stays fresh — the lists are tiny, it costs nothing.
 function latexCompletions(context) {
   const env = context.matchBefore(/\\(begin|end)\{[a-zA-Z@*]*$/);
   if (env) {
     const from = env.from + env.text.indexOf("{") + 1;
-    return { from, validFor: /^[a-zA-Z*]*$/, options: ENVIRONMENTS.map((e) => ({ label: e, type: "type" })) };
+    const typed = env.text.slice(env.text.indexOf("{") + 1).toLowerCase();
+    const options = ENVIRONMENTS.filter((e) => e.toLowerCase().startsWith(typed))
+      .map((e) => ({ label: e, type: "type" }));
+    if (!options.length) return null;
+    return { from, options, filter: false };
   }
   const cmd = context.matchBefore(/\\[a-zA-Z@]*$/);
   if (!cmd || (cmd.from === cmd.to && !context.explicit)) return null;
   const { snippetCompletion } = CM.autocomplete;
-  const options = COMMANDS.map(([label, tmpl, detail]) => snippetCompletion(tmpl, { label, type: "function", detail }));
-  for (const g of GREEK) options.push({ label: "\\" + g, type: "constant", detail: "Greek letter" });
-  return { from: cmd.from, options, validFor: /^\\[a-zA-Z@]*$/ };
+  const typed = cmd.text.toLowerCase();
+  const options = [];
+  for (const [label, tmpl, detail] of COMMANDS)
+    if (label.toLowerCase().startsWith(typed)) options.push(snippetCompletion(tmpl, { label, type: "function", detail }));
+  for (const g of GREEK) {
+    const label = "\\" + g;
+    if (label.toLowerCase().startsWith(typed)) options.push({ label, type: "constant", detail: "Greek letter" });
+  }
+  if (!options.length) return null;
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  return { from: cmd.from, options, filter: false };
 }
 // Shared editor extensions (no native history — the Yjs UndoManager owns undo for
 // collaborative text; binary files open read-only, where undo is moot anyway).

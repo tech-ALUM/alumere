@@ -332,7 +332,7 @@ body[data-conn="offline"] .offline-bar { display: flex; }
   border: 1px solid color-mix(in srgb, var(--ed-fg) 20%, var(--ed-bg)) !important;
 }
 .cm-tooltip-autocomplete { font-family: var(--mono) !important; font-size: 12.5px; border-radius: 8px !important; box-shadow: 0 8px 28px rgba(0,0,0,.14) !important; }
-.cm-tooltip-autocomplete ul li { color: var(--ed-fg); }
+.cm-tooltip-autocomplete ul li { color: var(--ed-fg); padding-top: 3px !important; padding-bottom: 3px !important; }
 .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: var(--accent-ink) !important; }
 .cm-completionDetail { color: color-mix(in srgb, var(--ed-fg) 55%, var(--ed-bg)); font-style: italic; margin-left: 8px; }
 .cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail { color: var(--accent-ink); opacity: .75; }
