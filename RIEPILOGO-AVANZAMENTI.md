@@ -7,6 +7,108 @@
 
 ---
 
+## 2026-07-20 — Giro 6: collasso pannelli + spell-check IT/EN + popup autocomplete leggibile ✅ (in attesa del check di Tommy)
+
+Tre richieste di Tommy (con screenshot): **① frecce per chiudere editor o PDF** sul divisorio
+(alla Overleaf), **② spell-check** con sottolineatura a puntini rossi, suggerimenti al tasto
+destro, dizionari **italiano + inglese** e parole custom **per progetto**, **③ il popup
+dell'autocomplete LaTeX illeggibile** in tema scuro. Niente rebuild del bundle CM6 (le
+decorazioni erano già esportate dal giro 4); tocca i 3 file client + `server.js` (persistenza
+dizionario) + nuovi asset vendorizzati.
+
+**① Collasso pannelli** (`editor.html`/`app.js`/`styles.css`)
+- Due chevron a metà del divisorio editor/PDF: **›** = divisorio a destra (chiudi il PDF, o
+  riporta l'editor), **‹** = divisorio a sinistra (chiudi l'editor, o riporta il PDF). Il verso
+  non cambia mai significato; da collassato resta solo il chevron che ripristina.
+- Il pannello collassato **resta nel grid** con colonna `0px` (un `display:none` farebbe slittare
+  le colonne dopo di lui) e sparisce con `visibility:hidden` (a 0px i suoi bordi si vedrebbero
+  ancora). Divisorio parcheggiato = niente drag né hover; freccia SyncTeX nascosta.
+- **Tutto ciò che porta al sorgente riapre l'editor collassato** (`revealEditor` in `openFile`,
+  `gotoIssue`, `gotoThread`): click sull'albero, riga d'errore, card di review, inverse search.
+  Il PDF si ri-adatta da solo (ResizeObserver già in essere; il fix `clientWidth=0` del giro 3
+  copre il caso "compile col PDF chiuso").
+
+**② Spell-check** — la scelta grossa: **due motori diversi, uno per lingua**, in un **Web Worker**
+(`public/spell-worker.js`) così parsing e lookup non toccano mai il thread dell'editor.
+- **Inglese**: Typo.js (hunspell in JS, BSD, vendorizzato in `public/vendor/typo/`) su
+  `en_US.aff/.dic` LibreOffice — 123k forme ≈ 30MB di hash, ok, e il suo `suggest()` è buono.
+- **Italiano**: Typo.js **esplode** — l'espansione completa di it_IT è ~3.1M forme e coi prefissi
+  di elisione (`l'`, `dell'`, …) in cross-product coi suffissi verbali **sfonda il limite delle
+  Map di V8** (~16.7M) dopo 23s. Soluzione in due mosse: (a) i 142 prefissi con apostrofo sono
+  **strippati dall'.aff** (one-off, finiscono in `elisions.json`) e ri-applicati a runtime
+  (`prefisso' + parola nota` — stesso insieme accettato, frazione della memoria); (b) le 3.1M
+  forme rimanenti vivono in un **filtro di Bloom precalcolato** (`it-words.bloom`, 9MB, K=17,
+  falsi-accetti ~1e-5 — dimensionato per il suggest, che sonda ~1k candidati a parola) generato
+  da `build/build-spell-bloom.mjs` (rigenerarlo: `docker exec alumere-dev node
+  /app/build/build-spell-bloom.mjs`). In alternativa sarebbero stati **~400MB di RAM** nel worker
+  (misurati). ⚠ Bug trovato costruendolo: `fnv(...) | 1` reinterpreta l'hash come int32
+  **negativo** → metà dei probe finiva su indici negativi che la Uint8Array **ingoia in
+  silenzio** (parole "aggiunte" ma mai ritrovate) — servì il `>>> 0`.
+- **Cosa si controlla**: tokenizzazione full-doc (fino a 500KB) con **maschere** per ciò che non è
+  prosa — commenti, `$…$`/`\[…\]`, `\comandi`, e gli argomenti "codice" (`\ref`, `\cite`,
+  `\usepackage`, `\includegraphics`, `\href`, ecc.). La parola sotto il cursore non viene
+  flaggata mentre la scrivi. Cache dei verdetti condivisa tra file; ricontrollo debounced su
+  edit (anche remoti) e cambio selezione.
+- **Sottolineatura**: `Decoration.mark` in uno StateField (si rimappa da sé ad ogni edit, come le
+  evidenzie dei commenti) + puntini rossi CSS (`text-decoration: dotted #e5484d`).
+- **Tasto destro su una parola flaggata** → menu con suggerimenti (delle due lingue
+  interfogliati) + **"Add … to the project dictionary"**; su parola non flaggata resta il menu
+  nativo. Ranking "fix più plausibile prima": trasposizione (wehn→when) e solo-accenti
+  (perche→perché) > coppia REP (qesto→questo — aggiunte a mano q→qu e gli accenti: l'.aff ne ha
+  solo 4) > sostituzione > cancellazione/inserzione; il suggerimento rispetta la maiuscola
+  (Wehn→When). Il primo giro aveva il fix giusto sepolto o assente (cap troppo aggressivo sui
+  candidati): ora si generano tutti i ~1k candidati d1 (un probe Bloom l'uno) e si ranka dopo.
+- **Dizionario di progetto**: `Y.Array("dict")` nello stesso doc Yjs → sync live a tutti i peer,
+  persistito come **`dictionary.json`** accanto a `chat.json` con gli stessi hook (seed in load,
+  riscrittura solo-se-cambiato → non tocca `updatedAt`). "Add to dictionary" toglie la
+  sottolineatura **ovunque, per tutti**. Worker rotto/asset mancanti → spellcheck spento in
+  silenzio, l'editor vive (posture dei commenti senza bundle).
+- **Licenze**: en_US = SCOWL (permissive), **it_IT = GPL-3** (file di dati LibreOffice; README
+  in `public/vendor/typo/`), Typo.js = BSD modificata. Da tenere presente se un domani si
+  ridistribuisce il codice.
+
+**③ Popup autocomplete**: la causa era **tema app scuro + popup CM6 col fondo chiaro di
+default** → testo `--muted` chiaro su fondo quasi bianco. Ora il tooltip segue la **palette
+dell'editor** (`--ed-bg/--ed-fg`, bordo in color-mix), dettagli in corsivo leggibili, match
+evidenziato in `--ed-cursor`, riga selezionata accento con testo `--accent-ink` (anche il
+dettaglio). Leggibile in tutte e 4 le palette, chiaro e scuro.
+
+**Verificato** (dev :3000, browser reale, due client per il sync, chiaro + scuro, console pulita,
+`test/smoke.sh` **16/16**)
+- **Collasso**: › → editor a tutta larghezza col solo ‹ sul bordo; ‹ ripristina; editor chiuso →
+  PDF/Log a tutta larghezza; click su un file nell'albero **riapre l'editor**; drag del divisorio
+  intatto da aperto, morto da collassato.
+- **Spell**: sul campo di prova di Tommy (`wehn i was a chidl` in math.tex) flagga **esattamente**
+  `wehn`/`chidl` (non "Euler's", non la matematica, non `\beg`); tasto destro su `wehn` → **when**
+  primo → click → riga corretta (poi ripristinata com'era). Italiano: "Qesto è sbagliatto perche
+  l'altro va bene" → flaggati solo Qesto/sbagliatto/perche (è, l'altro, va, bene puliti — elisione
+  riconosciuta); `perche`→**perché** primo, `Qesto`→**Questo** primo (maiuscola rispettata).
+  **Add to dictionary** su "Alumère" (che i dizionari non conoscono): sottolineatura sparita
+  **in entrambi i client all'istante**, `dictionary.json` scritto con la parola.
+- **Popup**: `\beg` in Pastel Light e in **Slate Dark** (lo scenario dello screenshot di Tommy) →
+  leggibile in entrambi; menu spell leggibile in chiaro e scuro.
+- ⚠ Residui di verifica, dichiarati: "Alumère" **resta nel dizionario** del progetto Sample paper
+  (sensato, direi da tenere); i miei edit di prova su math.tex sono stati **ripristinati al
+  carattere**, ma restano 2-3 versioni auto in history e l'`updatedAt` è avanzato (le versioni
+  scadono con la retention). Le righe `wehn i was a chidl` e `\beg` di Tommy sono rimaste **come
+  le ha lasciate** (servono a lui per provare lo spell-check :).
+- Inciampo del tool browser, nuovo per il diario: dopo un cambio tema via JS il **compositor
+  headless non ridipinge** le regioni non toccate — gli screenshot mostravano la palette vecchia
+  con gli stili computati già nuovi; un resize della finestra forza il repaint. (Le sonde sui
+  computed style non mentivano; gli occhi sì.)
+
+**Pesi nuovi nel repo**: `it-words.bloom` 9MB + dizionari ~2MB + typo.js — tutto statico, niente
+CDN a runtime, il Dockerfile li copia e basta. **Nessun rebuild del bundle CM6.**
+
+**Rimandato di proposito**: rimozione di una parola dal dizionario di progetto (per ora solo
+add; si può editare `dictionary.json` a progetto chiuso), scelta della lingua per progetto
+(oggi IT+EN sempre attivi insieme), spell nei commenti/chat.
+
+**Processo**: implementato e verificato, **niente commit** — aspetto il check di Tommy.
+⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-18 (novies) — Parità Overleaf, giro 5/5: Review panel + Chat ✅ (in attesa del check di Tommy)
 
 Quinto e ultimo giro dell'arco "parità Overleaf", sul disegno chiesto da Tommy (screenshot Overleaf):
