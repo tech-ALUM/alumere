@@ -7,6 +7,28 @@
 
 ---
 
+## 2026-07-20 (bis) — Mini-giro: autocomplete a prefisso + un filo d'interlinea ✅ (check di Tommy OK)
+
+Richiesta veloce di Tommy (screenshot del popup): **① voci troppo appiccicate** e **② il fuzzy
+match di CM6** che con `\be` proponeva anche `\subsection` (b…e sparsi nella parola). Due tocchi:
+- **Match a prefisso** (`app.js`, `latexCompletions`): `filter: false` spegne il fuzzy di CM6 e
+  si filtra a mano — restano solo le opzioni che **iniziano** col testo digitato
+  (case-insensitive), in ordine alfabetico; vale per comandi e per i nomi di environment in
+  `\begin{…}`. Zero match → popup chiuso (return null). Tolto il `validFor` apposta: con
+  `filter:false` CM riuserebbe la lista cachata senza rifiltrarla, quindi la source ri-gira ad
+  ogni tasto (lista minuscola, costo zero). Effetto collaterale accettato: sparisce il grassetto
+  sulle lettere matchate (CM non calcola più gli span di match), ma il match ora è sempre il
+  prefisso appena digitato.
+- **Interlinea** (`styles.css`): +3px di padding verticale per voce. "Giusto un filo", com'era
+  chiesto.
+
+**Verificato** (dev :3000, Sample paper): `\be` → solo begin/beta; `\bet` → solo `\beta`;
+`\betz` → chiuso; `\begin{it` → solo `itemize`; console pulita; riga di prova ripulita al
+carattere (restano le solite versioni auto in history). Le righe di test di Tommy in math.tex
+intatte. Nessun rebuild del bundle CM6.
+
+---
+
 ## 2026-07-20 — Giro 6: collasso pannelli + spell-check IT/EN + popup autocomplete leggibile ✅ (in attesa del check di Tommy)
 
 Tre richieste di Tommy (con screenshot): **① frecce per chiudere editor o PDF** sul divisorio
