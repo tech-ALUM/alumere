@@ -7,6 +7,82 @@
 
 ---
 
+## 2026-07-21 — Giro 7: header del tree alla Overleaf + upload (popup e drag&drop) + collasso via rail ⏳ (in attesa del check di Tommy)
+
+Quattro richieste di Tommy (con screenshot di Overleaf come riferimento), lavorate in autonomia
+con suo consenso esplicito per i comandi della sessione. **Niente commit**: aspetta il suo check.
+
+**① Titoli dei pannelli in minuscolo** — via il `text-transform: uppercase` da `.pane-head`
+(`styles.css`): ora "File tree" (rinominato da "Project"), "Review", "Chat", "Editor", "Preview"
+con la sola iniziale maiuscola, come chiesto.
+
+**② Header del tree coi pulsanti a icona** (alla Overleaf): *new file*, *new folder*, *upload*
+(SVG stroke in stile rail, nuova classe `.iconbtn`). L'upload apre il popup **"Add files"**
+fotocopiato da Overleaf ma **solo l'area drag&drop** (niente sidebar Zotero/Mendeley/…):
+"Drop or paste your files… Select files / select a folder", con i due link su input file nascosti
+(il secondo con `webkitdirectory`). Accetta qualsiasi file; **paste** di screenshot supportato
+(listener su document, attivo solo a popup aperto); Esc / ✕ / click sullo scrim chiudono.
+
+**③ Upload nel doc Yjs, zip estratti** — scelta di fondo: **tutto passa dal Y.Map condiviso**
+client-side (testo → `Y.Text` editabile, resto → `{encoding:"base64"}`), MAI da una scrittura
+server su files/ — verrebbe sovrascritta dal persist debounced del doc (stesso motivo del
+restore della history). Conseguenze:
+- sync live a tutti i peer, persistenza e history gratis (passano dagli hook già esistenti);
+- **.zip**: il client non sa dezippare → nuovo endpoint **`POST /api/unzip`** (`server.js`,
+  AdmZip già in casa) che NON tocca nessun progetto: torna la lista piatta
+  `{path, content, encoding?}` (stesse regole dell'upload progetto: top-folder comune strippata,
+  `__MACOSX`/`.DS_Store` saltati) e il client la fonde nel doc. Zip droppato in una cartella →
+  contenuto estratto lì.
+- **Sovrascrittura**: un upload su un path esistente aperto in editor **riusa il Y.Text** (delete
+  + insert) — un Y.Text nuovo orfanerebbe gli editor collegati; verificato che l'editor aperto
+  si aggiorna live.
+- Limite 25MB/file (il body JSON del server è 60mb e il base64 gonfia ×1.33); file saltati
+  elencati in un alert; 1 solo file di testo caricato → viene aperto.
+
+**④ Drag&drop diretto nel tree** — droppa su una **cartella** (evidenza tratteggiata) e finisce
+lì; su un **file** → nella sua cartella; su spazio vuoto → root. Cartelle intere droppate:
+struttura preservata (walk ricorsivo `webkitGetAsEntry`, batch da 100 di `readEntries`).
+`dtHasFiles` filtra i drag interni di testo. Hint sotto il tree aggiornato.
+
+**⑤ Collasso via rail** — click sull'icona rail del pannello **già attivo** → l'intera colonna
+si chiude (stile VS Code); altro click riapre; vale per File tree, Review e Chat. Stesso trucco
+del collasso editor/PDF: colonna a 0px nel grid (un display:none slitterebbe le colonne),
+pannello `visibility:hidden`, divisorio parcheggiato (`data-side-collapsed` sul workspace).
+A colonna chiusa nessuna icona rail è "active"; i messaggi chat arrivati con chat selezionata
+ma colonna chiusa contano da unread (badge).
+
+**⑥ Bug trovato da Tommy al check: chat duplicata "n" volte** — causa: il server non
+persisteva lo STATO Yjs, rimaterializzava (files/ + chat.json) e al load ri-seminava. A ogni
+riavvio (oggi tanti: `node --watch` sui miei edit) il re-seed creava item CRDT **con ID nuovi**;
+un client ancora connesso rifondeva i **suoi** item originali: le Y.Map convergono per chiave
+(file, commenti — mai duplicati), i **Y.Array concatenano** → chat e dizionario duplicati una
+volta per riavvio-con-client-vivo. Fix doppio:
+- **`doc.ystate` per progetto** (`server.js`): a ogni store si salva anche
+  `Y.encodeStateAsUpdate(document)`; al load si fa `applyUpdate` di quello (stessi item, stessi
+  ID → merge idempotente) e si ri-semina dai JSON **solo** se non esiste (primo open /
+  progetto pre-giro-7). files/ e i .json restano come materializzazione leggibile. Il PUT
+  legacy che riscrive files/ da fuori ora **cancella** lo state (sennò resusciterebbe il
+  vecchio contenuto).
+- **Dedup deterministica client** (`app.js`, in onSynced): chat per `id` messaggio, dizionario
+  per parola — l'ordine di un Y.Array è convergente, quindi ogni peer sceglie le STESSE copie
+  da cancellare (concorrenza sicura, niente over-delete). Ripulisce il pregresso ovunque e
+  fa da rete di sicurezza.
+- Verificato: chat tornata a 3 messaggi (deletes propagati ai peer), `chat.json` riscritto a 3,
+  e il test di regressione vero — `docker restart` col client connesso → **ancora 3**, load da
+  `doc.ystate` nei log. smoke.sh di nuovo 16/16 (copre la migrazione senza state).
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh`
+**16/16**): titoli ok nei due temi; toggle rail su files e review (apri/chiudi/riapri, editor
+che si ri-misura, PDF che si ri-adatta); popup identico all'originale e leggibile in scuro;
+drop di .tex alla root (creato, aperto in tab, popup autochiuso); PNG generato via canvas
+droppato su `sections/` (arrivato lì, icona 🖼); zip con `myproj/{chapter1.tex, figs/logo.png}`
++ `__MACOSX` → estratto alla root senza la top-folder e senza junk; sovrascrittura di notes.tex
+aperto → contenuto live in editor; persistenza su disco controllata nel container (PNG con
+header sano, testo aggiornato, store log a 8 file). Poi ripulito tutto: progetto tornato ai
+4 file originali, tema rimesso su light, testzip.zip rimosso da public/.
+
+---
+
 ## 2026-07-20 (bis) — Mini-giro: autocomplete a prefisso + un filo d'interlinea ✅ (check di Tommy OK)
 
 Richiesta veloce di Tommy (screenshot del popup): **① voci troppo appiccicate** e **② il fuzzy
