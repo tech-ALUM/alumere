@@ -76,14 +76,21 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 
     <section class="pane files" id="filesPane">
       <div class="pane-head">
-        <span>Project</span>
+        <span>File tree</span>
         <div class="pane-actions">
-          <button id="newFile" class="mini" title="New file">＋ file</button>
-          <button id="newFolder" class="mini" title="New folder">＋ folder</button>
+          <button id="newFile" class="iconbtn" title="New file">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H5a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 5 16h8a1.5 1.5 0 0 0 1.5-1.5V6.5z"/><path d="M10 2v4.5h4.5"/><path d="M9 9.3v4M7 11.3h4"/></svg>
+          </button>
+          <button id="newFolder" class="iconbtn" title="New folder">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5A1.5 1.5 0 0 1 4 3.5h3.2L8.8 5.5H14A1.5 1.5 0 0 1 15.5 7v6a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 13z"/><path d="M9 8.2v3.6M7.2 10h3.6"/></svg>
+          </button>
+          <button id="uploadFiles" class="iconbtn" title="Upload files — images, .tex, .zip…">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5v-8"/><path d="M5.5 7 9 3.5 12.5 7"/><path d="M3 12.5V14a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 15 14v-1.5"/></svg>
+          </button>
         </div>
       </div>
       <ul id="tree" class="tree"></ul>
-      <div class="files-hint">Click a file to open it · hover a row to rename or delete</div>
+      <div class="files-hint">Click a file to open it · drop files here to upload them</div>
     </section>
 
     <!-- Review panel (giro 5): every comment thread of the project — open, resolved and
@@ -180,6 +187,29 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       </div>
     </section>
   </main>
+
+  <!-- Upload (giro 7): Overleaf-style "Add files" dialog — just the drop area, no side menu.
+       Accepts images, .tex/.bib/…, and project .zip files (extracted into the tree). The two
+       hidden inputs back the "Select files" / "select a folder" links. -->
+  <div id="uploadOverlay" class="upload-overlay" hidden aria-hidden="true">
+    <div class="upload-modal" role="dialog" aria-label="Add files">
+      <div class="upload-head">
+        <span>Add files</span>
+        <button id="uploadClose" class="iconbtn" title="Close (Esc)">
+          <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 4.5l9 9M13.5 4.5l-9 9"/></svg>
+        </button>
+      </div>
+      <div id="dropZone" class="upload-drop" tabindex="-1">
+        <div class="upload-drop-text">
+          Drop or paste your files, folder, or images here.<br>
+          <a id="pickFiles" href="#">Select files</a> or <a id="pickFolder" href="#">select a folder</a> from your computer.
+        </div>
+        <div class="upload-drop-sub">A .zip is extracted into the project, keeping its folders.</div>
+      </div>
+    </div>
+    <input type="file" id="uploadFileInput" multiple hidden>
+    <input type="file" id="uploadFolderInput" webkitdirectory hidden>
+  </div>
 
   <!-- History (M2): full-screen overlay — timeline on the left, per-file diff of the selected version on the right. -->
   <div id="historyOverlay" class="hist-overlay" hidden aria-hidden="true">

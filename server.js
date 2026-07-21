@@ -667,6 +667,9 @@ app.put("/api/projects/:id", requireUser, async (req, res) => {
   const { files, name } = req.body || {};
   try {
     await writeFiles(id, files);
+    // files/ was rewritten OUTSIDE the doc: the saved Yjs state is stale now — drop it
+    // so the next open re-seeds from disk instead of resurrecting the old content.
+    await rm(ydocStatePath(id), { force: true });
     meta.updatedAt = new Date().toISOString();
     meta.updatedBy = briefUser(req.user);
     if (name) meta.name = name;
@@ -784,6 +787,39 @@ app.post("/api/projects/upload", requireUser, async (req, res) => {
     await rm(projectDir(id), { recursive: true, force: true }).catch(() => {});
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// Extract a .zip (base64 in JSON) into a flat { path, content, encoding? } list, WITHOUT
+// touching any project: uploads into an open project go through the live Yjs doc client-side
+// (a server-side files/ write would just be overwritten by the next debounced store), but the
+// unzipping itself must happen here — AdmZip has no browser twin. Same rules as the project
+// upload above: strip a single common top-level folder, skip __MACOSX/.DS_Store.
+app.post("/api/unzip", requireUser, async (req, res) => {
+  const { zip } = req.body || {};
+  if (!zip) return res.status(400).json({ ok: false, error: "no zip data" });
+  try {
+    const entries = new AdmZip(Buffer.from(zip, "base64")).getEntries();
+    const tops = new Set();
+    for (const en of entries) {
+      const p = en.entryName.replace(/\\/g, "/");
+      if (!p || p.startsWith("__MACOSX")) continue;
+      tops.add(p.split("/")[0]);
+    }
+    const strip = tops.size === 1 ? [...tops][0] + "/" : "";
+    const files = [];
+    for (const en of entries) {
+      let p = en.entryName.replace(/\\/g, "/");
+      if (en.isDirectory || p.startsWith("__MACOSX") || p.endsWith(".DS_Store")) continue;
+      if (strip && p.startsWith(strip)) p = p.slice(strip.length);
+      const rel = safeRelPath(p);
+      if (!rel) continue;
+      const buf = en.getData();
+      if (isText(rel)) files.push({ path: rel, content: buf.toString("utf8") });
+      else files.push({ path: rel, content: buf.toString("base64"), encoding: "base64" });
+    }
+    if (!files.length) return res.status(400).json({ ok: false, error: "empty or invalid zip" });
+    res.json({ ok: true, files });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ---------- download / export / archive ----------
@@ -1184,6 +1220,13 @@ async function readChat(id) {
 // (same reasoning and same hooks as chat.json: not a source file).
 const COLLAB_DICT_KEY = "dict";
 const dictPath = (id) => path.join(projectDir(id), "dictionary.json");
+// The Yjs binary state of a project's doc (giro 7). Loading THIS instead of re-seeding
+// from files/ + *.json keeps every CRDT item's identity across server restarts, so a
+// client that reconnects merges idempotently. Without it, re-seeded items get fresh IDs:
+// Y.Maps survive (same keys overwrite) but Y.Arrays CONCATENATE — chat and dictionary
+// duplicated once per restart-with-a-live-client. files/ & the JSONs stay as the readable
+// materialization (compile, download, git-friendliness); this file is the doc's truth.
+const ydocStatePath = (id) => path.join(projectDir(id), "doc.ystate");
 async function readDict(id) {
   try { const j = JSON.parse(await readFile(dictPath(id), "utf8")); return Array.isArray(j.words) ? j.words : []; }
   catch { return []; }
@@ -1208,6 +1251,17 @@ async function attachCollab(httpServer) {
     if (!meta) return;
     const filesMap = document.getMap(COLLAB_FILES_KEY);
     if (filesMap.size > 0) return;                          // already loaded/populated
+    // Preferred path: restore the saved Yjs state — same items, same IDs, idempotent
+    // merges with whatever the clients still hold. Fall through to the JSON seeding only
+    // when it doesn't exist yet (first open ever / project written before giro 7).
+    try {
+      const bin = await readFile(ydocStatePath(documentName));
+      if (bin.length) {
+        Y.applyUpdate(document, new Uint8Array(bin));
+        console.log(`[alumere] collab loaded "${documentName}" (ydoc state, ${bin.length} bytes)`);
+        return;
+      }
+    } catch {}
     const files = await readFilesFlat(filesDir(documentName));
     document.transact(() => {
       for (const f of files) {
@@ -1261,6 +1315,9 @@ async function attachCollab(httpServer) {
     }
     if (!files.length) { console.warn(`[alumere] collab store skipped for "${documentName}" (doc empty)`); return; }
     await writeFiles(documentName, files);
+    // Persist the doc's binary state alongside its materialization (see ydocStatePath).
+    try { await writeFile(ydocStatePath(documentName), Buffer.from(Y.encodeStateAsUpdate(document))); }
+    catch (e) { console.warn(`[alumere] ydoc state store failed for "${documentName}": ${e.message}`); }
     // Persist comments alongside (same debounced boundary). Written only when they actually
     // changed, so ordinary text-editing stores don't rewrite the file every few seconds.
     try {

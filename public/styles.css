@@ -219,7 +219,6 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 12px; font-size: 12px; font-weight: 600; color: var(--muted);
   background: var(--panel-2); border-bottom: 1px solid var(--line);
-  text-transform: uppercase; letter-spacing: .04em;
 }
 .pane.editor .pane-head, .pane.preview .pane-head { background: var(--panel-2); }
 .pane-actions { display: flex; gap: 6px; }
@@ -230,6 +229,13 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 .mini:hover { background: var(--accent-soft); }
 .tabbtn { color: var(--muted); }
 .tabbtn.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+/* Square icon buttons (tree header, upload dialog) — same palette as .mini. */
+.iconbtn {
+  width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--accent-d); cursor: pointer;
+}
+.iconbtn:hover { background: var(--accent-soft); }
 
 /* ---------- File tree ---------- */
 .tree { list-style: none; margin: 0; padding: 6px 4px; overflow: auto; flex: 1; }
@@ -258,6 +264,10 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 }
 .rowactions button:hover { opacity: 1; background: rgba(0,0,0,.10); }
 .files-hint { font-size: 10.5px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); }
+/* Drag&drop upload targets: the hovered row (drop into that folder / the file's folder)
+   or the whole tree (drop at the root). */
+.row.drop-hover { background: var(--accent-soft); outline: 1.5px dashed var(--accent); outline-offset: -1.5px; }
+.tree.drop-root { outline: 1.5px dashed var(--accent); outline-offset: -3px; border-radius: 8px; background: var(--accent-soft); }
 
 /* ---------- Editor ---------- */
 /* Losing the socket is not an error and not data loss — the CRDT merges the backlog on
@@ -456,6 +466,14 @@ body.dragging .pdf-scroll { pointer-events: none; }
 .workspace[data-collapsed] .splitter[data-target="editorPane"] { cursor: default; }
 .workspace[data-collapsed] .splitter[data-target="editorPane"]:hover::after { background: var(--line); }
 .workspace[data-collapsed] .sync-jump { display: none; }
+
+/* Side panel collapsed (giro 7): clicking the active rail icon closes the whole left column.
+   Same trick as the editor/PDF collapse — the pane keeps its 0px grid track (display:none
+   would shift the columns) and goes invisible; its divider is parked. */
+.workspace[data-side-collapsed] .pane.files,
+.workspace[data-side-collapsed] .pane.side { visibility: hidden; border: 0; }
+.workspace[data-side-collapsed] .splitter[data-target="filesPane"] { cursor: default; }
+.workspace[data-side-collapsed] .splitter[data-target="filesPane"]:hover::after { background: var(--line); }
 
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
@@ -1046,3 +1064,29 @@ body[data-editor-theme="nord"]{
   padding: 8px; border-top: 1px solid var(--line); background: var(--panel-2);
 }
 .chat-composer textarea { flex: 1; max-height: 110px; }
+
+/* ---------- Upload dialog (giro 7) ---------- */
+.upload-overlay {
+  position: fixed; inset: 0; z-index: 45;
+  display: grid; place-items: center;
+  background: rgba(10, 18, 26, .45);
+}
+.upload-overlay[hidden] { display: none; }            /* the attribute wins over display:grid */
+.upload-modal {
+  width: min(560px, 92vw);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  padding: 14px;
+}
+.upload-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 15px; font-weight: 700; margin: 0 2px 12px;
+}
+.upload-drop {
+  border: 1.5px dashed var(--line); border-radius: 10px;
+  padding: 46px 24px; text-align: center; outline: none;
+}
+.upload-drop.dragover { border-color: var(--accent); background: var(--accent-soft); }
+.upload-drop-text { font-size: 13.5px; line-height: 1.7; }
+.upload-drop-text a { color: var(--accent-d); font-weight: 600; text-decoration: underline; cursor: pointer; }
+.upload-drop-sub { margin-top: 10px; font-size: 11px; color: var(--muted); }

@@ -260,6 +260,22 @@ function buildList(list) {
     });
     renameBtn.addEventListener("click", (e) => { e.stopPropagation(); renameNode(node); });
     delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteNode(node); });
+    // Drop files straight onto a row: a folder swallows them, a file targets its own folder.
+    // stopPropagation keeps the tree's root handler (and the row's ancestors) out of it.
+    ["dragenter", "dragover"].forEach((t) => row.addEventListener(t, (e) => {
+      if (!dtHasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      row.classList.add("drop-hover"); treeEl.classList.remove("drop-root");
+    }));
+    row.addEventListener("dragleave", () => row.classList.remove("drop-hover"));
+    row.addEventListener("drop", async (e) => {
+      if (!dtHasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      row.classList.remove("drop-hover");
+      const dir = node.type === "folder" ? node.path : parentOf(node.path);
+      importFiles(await itemsFromDataTransfer(e.dataTransfer), dir);
+    });
     if (node.type === "folder" && openFolder) li.appendChild(buildList(node.children));
     ul.appendChild(li);
   }
@@ -362,6 +378,186 @@ function onFilesChanged() {
   }
   renderTabs();
   if (openTabs.length !== had) saveTabs();
+}
+
+// ---------- Upload (giro 7): "Add files" dialog + drag&drop onto the tree ----------
+// Everything lands in the SHARED Y.Map, so uploads propagate live to every peer and persist
+// through the normal store path. Text files (same extension list as the server's isText)
+// become editable Y.Text; the rest travels as { encoding:"base64" }. A .zip is sent to
+// /api/unzip (AdmZip lives server-side) and its entries merged in, folders included.
+const TEXT_UPLOAD_RE = /\.(tex|bib|cls|sty|txt|md|markdown|csv|tsv|json|ya?ml|cfg|bbl|aux|toc)$/i;
+const MAX_UPLOAD_MB = 25;                // stays well under the server's 60mb JSON body cap (base64 is ×1.33)
+let uploadDir = "";                      // folder the dialog imports into (targetDir at open time)
+
+function fileAsBase64(f) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+    r.onerror = () => reject(r.error || new Error("read failed"));
+    r.readAsDataURL(f);
+  });
+}
+const joinPath = (dir, rel) => (dir ? `${dir}/${rel}` : rel);
+// Forward slashes, no empty/"."/".." segments — mirrors the server's safeRelPath.
+function cleanRel(p) {
+  return String(p || "").replace(/\\/g, "/").split("/")
+    .filter((s) => s && s !== "." && s !== "..").join("/");
+}
+
+// Write one entry into the shared map (inside a caller-provided transaction). Overwriting
+// an OPEN text file must reuse its Y.Text (the editor is bound to that instance) — a fresh
+// Y.Text at the same path would leave every open editor orphaned.
+function putUploadEntry(path, w) {
+  const existing = filesMap.get(path);
+  if (w.base64 != null) filesMap.set(path, { encoding: "base64", content: w.base64 });
+  else if (existing instanceof Y.Text) {
+    existing.delete(0, existing.length);
+    if (w.text) existing.insert(0, w.text);
+  } else {
+    const t = new Y.Text();
+    if (w.text) t.insert(0, w.text);
+    filesMap.set(path, t);
+  }
+}
+
+// items: [{ file, rel }] — rel is the path INSIDE the target folder (folder drops/pickers
+// keep their structure). Returns how many files were written.
+async function importFiles(items, dir) {
+  const writes = [], skipped = [];
+  for (const it of items) {
+    const rel = cleanRel(it.rel || it.file.name);
+    if (!rel) continue;
+    if (/\.zip$/i.test(rel)) {
+      try {
+        if (it.file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new Error(`larger than ${MAX_UPLOAD_MB} MB`);
+        const zip = await fileAsBase64(it.file);
+        const r = await fetch("/api/unzip", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zip }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        // The zip's contents land where the zip itself was dropped.
+        const base = parentOf(joinPath(dir, rel));
+        for (const f of d.files) {
+          const p = joinPath(base, cleanRel(f.path));
+          if (!p) continue;
+          writes.push(f.encoding === "base64" ? { path: p, base64: f.content } : { path: p, text: f.content });
+        }
+      } catch (e) { skipped.push(`${rel} — ${e.message}`); }
+      continue;
+    }
+    if (it.file.size > MAX_UPLOAD_MB * 1024 * 1024) { skipped.push(`${rel} — larger than ${MAX_UPLOAD_MB} MB`); continue; }
+    try {
+      const path = joinPath(dir, rel);
+      if (TEXT_UPLOAD_RE.test(rel)) writes.push({ path, text: await it.file.text() });
+      else writes.push({ path, base64: await fileAsBase64(it.file) });
+    } catch (e) { skipped.push(`${rel} — ${e.message}`); }
+  }
+  if (writes.length) {
+    ydoc.transact(() => { for (const w of writes) putUploadEntry(w.path, w); });
+    // Any pending (empty, local-only) folder that just received a real file is implicit now.
+    for (const p of [...pendingFolders])
+      if (writes.some((w) => w.path.startsWith(p + "/"))) pendingFolders.delete(p);
+    setUpdatedBy();
+    renderTree();
+    // A single text file is most likely "the file I want to work on" — open it.
+    if (writes.length === 1 && writes[0].text != null) openFile(writes[0].path);
+  }
+  if (skipped.length) alert("Some files were skipped:\n\n" + skipped.join("\n"));
+  return writes.length;
+}
+
+// DataTransfer → [{ file, rel }]. webkitGetAsEntry lets a dropped FOLDER be walked
+// recursively (readEntries hands back batches of ≤100, hence the readMore loop).
+function walkEntry(entry, prefix) {
+  return new Promise((resolve) => {
+    if (entry.isFile) entry.file((f) => resolve([{ file: f, rel: prefix + entry.name }]), () => resolve([]));
+    else if (entry.isDirectory) {
+      const reader = entry.createReader(), acc = [];
+      const readMore = () => reader.readEntries(async (ents) => {
+        if (!ents.length) return resolve(acc);
+        for (const e of ents) acc.push(...await walkEntry(e, prefix + entry.name + "/"));
+        readMore();
+      }, () => resolve(acc));
+      readMore();
+    } else resolve([]);
+  });
+}
+async function itemsFromDataTransfer(dt) {
+  const out = [];
+  if (dt.items && dt.items.length && dt.items[0].webkitGetAsEntry) {
+    const walks = [];
+    for (const item of [...dt.items]) {
+      const entry = item.webkitGetAsEntry();
+      if (entry) walks.push(walkEntry(entry, ""));
+      else { const f = item.getAsFile && item.getAsFile(); if (f) out.push({ file: f, rel: f.name }); }
+    }
+    for (const w of walks) out.push(...await w);
+  } else {
+    for (const f of [...(dt.files || [])]) out.push({ file: f, rel: f.name });
+  }
+  return out;
+}
+const dtHasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+
+function openUpload() { uploadDir = targetDir; $("uploadOverlay").hidden = false; }
+function closeUpload() { $("uploadOverlay").hidden = true; }
+
+function setupUpload() {
+  const overlay = $("uploadOverlay"), dz = $("dropZone");
+  const fileInput = $("uploadFileInput"), folderInput = $("uploadFolderInput");
+  $("uploadFiles").addEventListener("click", openUpload);
+  $("uploadClose").addEventListener("click", closeUpload);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeUpload(); });
+
+  $("pickFiles").addEventListener("click", (e) => { e.preventDefault(); fileInput.click(); });
+  $("pickFolder").addEventListener("click", (e) => { e.preventDefault(); folderInput.click(); });
+  fileInput.addEventListener("change", async () => {
+    const items = [...fileInput.files].map((f) => ({ file: f, rel: f.name }));
+    fileInput.value = "";
+    if (await importFiles(items, uploadDir)) closeUpload();
+  });
+  folderInput.addEventListener("change", async () => {
+    // webkitRelativePath keeps the picked folder's own name as the first segment.
+    const items = [...folderInput.files].map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }));
+    folderInput.value = "";
+    if (await importFiles(items, uploadDir)) closeUpload();
+  });
+
+  ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => {
+    if (!dtHasFiles(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+    dz.classList.add("dragover");
+  }));
+  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
+  dz.addEventListener("drop", async (e) => {
+    e.preventDefault(); dz.classList.remove("dragover");
+    if (await importFiles(await itemsFromDataTransfer(e.dataTransfer), uploadDir)) closeUpload();
+  });
+  // "or paste": screenshots land in clipboardData.files as PNGs.
+  document.addEventListener("paste", async (e) => {
+    if (overlay.hidden) return;
+    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    if (await importFiles(files.map((f) => ({ file: f, rel: f.name })), uploadDir)) closeUpload();
+  });
+
+  // Drag&drop straight onto the tree: the ROOT target. Folder rows add their own handlers
+  // in buildList (a drop on a row is stopPropagation'd, so no double import).
+  ["dragenter", "dragover"].forEach((t) => treeEl.addEventListener(t, (e) => {
+    if (!dtHasFiles(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+    treeEl.classList.add("drop-root");
+  }));
+  treeEl.addEventListener("dragleave", (e) => {
+    if (!treeEl.contains(e.relatedTarget)) treeEl.classList.remove("drop-root");
+  });
+  treeEl.addEventListener("drop", async (e) => {
+    if (!dtHasFiles(e)) return;
+    e.preventDefault(); treeEl.classList.remove("drop-root");
+    importFiles(await itemsFromDataTransfer(e.dataTransfer), "");
+  });
 }
 
 // ---------- Editor (CodeMirror bound to the active file's Y.Text) ----------
@@ -1762,23 +1958,42 @@ function spellExtensions() {
 // resolve/delete; Chat is a plain group chat over Y.Array("chat"), persisted server-side
 // as chat.json with the same hooks as comments.
 let sidePanel = "files";
+let sideOpen = true;                     // giro 7: false = the whole left column is collapsed
 let reviewFilter = "open";               // which tab of the review panel is showing
 let chatArr = null, chatUnread = 0;      // unread only counts while the chat panel is closed
 
 function setSidePanel(name) {
   sidePanel = name;
+  sideOpen = true;                       // any explicit "show me X" reopens a collapsed column
+  applyLayout();
   $("filesPane").hidden = name !== "files";
   $("reviewPane").hidden = name !== "review";
   $("chatPane").hidden = name !== "chat";
-  $("railFiles").classList.toggle("active", name === "files");
-  $("railReview").classList.toggle("active", name === "review");
-  $("railChat").classList.toggle("active", name === "chat");
+  updateRailActive();
   if (name === "review") renderReviewPanel();
   if (name === "chat") {
     chatUnread = 0; updateRailBadges();
     renderChat(); scrollChatBottom(true);
     $("chatInput").focus();
   }
+  if (view) view.requestMeasure();       // the editor width may have jumped (PDF re-fits itself)
+}
+
+// Rail click: switch panel, or collapse the column when the panel is already the open one.
+function toggleSidePanel(name) {
+  if (sideOpen && sidePanel === name) {
+    sideOpen = false;
+    applyLayout(); updateRailActive();
+    if (view) view.requestMeasure();
+  } else setSidePanel(name);
+}
+
+// No rail icon reads as active while the column is collapsed — the highlight means
+// "this is what you are looking at", not "this is what would come back".
+function updateRailActive() {
+  $("railFiles").classList.toggle("active", sideOpen && sidePanel === "files");
+  $("railReview").classList.toggle("active", sideOpen && sidePanel === "review");
+  $("railChat").classList.toggle("active", sideOpen && sidePanel === "chat");
 }
 
 function updateRailBadges() {
@@ -1961,7 +2176,7 @@ function sendChat() {
 
 function onChatChanged(e) {
   if (!booted) return;
-  if (sidePanel === "chat") { renderChat(); scrollChatBottom(); }
+  if (sidePanel === "chat" && sideOpen) { renderChat(); scrollChatBottom(); }
   else {
     let n = 0;
     for (const d of e.changes.delta) if (d.insert) for (const m of d.insert) if (m && m.by && m.by.id !== me.id) n++;
@@ -2020,7 +2235,10 @@ function applyLayout() {
   // but the track goes to 0 and the pane turns invisible via CSS (data-collapsed below).
   const ed = collapsedPane === "editor" ? "0px" : collapsedPane === "preview" ? "1fr" : `${editorFrac}fr`;
   const pv = collapsedPane === "preview" ? "0px" : collapsedPane === "editor" ? "1fr" : `${1 - editorFrac}fr`;
-  workspace.style.gridTemplateColumns = `46px ${filesW}px 6px ${ed} 6px ${pv}`;
+  // Same trick for the side column (giro 7): clicking the active rail icon parks it at 0.
+  workspace.style.gridTemplateColumns = `46px ${sideOpen ? filesW : 0}px 6px ${ed} 6px ${pv}`;
+  if (sideOpen) delete workspace.dataset.sideCollapsed;
+  else workspace.dataset.sideCollapsed = "1";
   if (collapsedPane) workspace.dataset.collapsed = collapsedPane;
   else delete workspace.dataset.collapsed;
   // Only the restoring chevron survives a collapse: › always moves the divider right,
@@ -2046,6 +2264,7 @@ function setupSplitters() {
   document.querySelectorAll(".splitter").forEach((sp, i) => {
     sp.addEventListener("mousedown", (e) => {
       if (i === 1 && collapsedPane) return;          // a collapsed divider is parked, not draggable
+      if (i === 0 && !sideOpen) return;              // same for the side column's divider
       e.preventDefault();
       const startX = e.clientX, startFilesW = filesW, startFrac = editorFrac;
       const avail = () => workspace.clientWidth - filesW - 12;
@@ -2207,10 +2426,31 @@ function noteNotSynced() {
   }, OFFLINE_GRACE_MS);
 }
 
+// Self-heal (giro 7): before the server persisted the doc's BINARY Yjs state, a restart
+// with a live client duplicated the chat / dictionary Y.Arrays (the re-seed made fresh
+// items, the reconnecting client merged back the originals). The array order is convergent
+// across peers, so every client that runs this keeps the SAME first occurrence per key and
+// deletes the same copies — concurrent runs converge, they can't over-delete.
+function dedupSharedArrays() {
+  const prune = (arr, keyOf) => {
+    if (!arr) return;
+    const seen = new Set(), dels = [];
+    arr.toArray().forEach((v, i) => {
+      const k = keyOf(v);
+      if (k == null) return;                       // unkeyed entry: leave it alone
+      if (seen.has(k)) dels.push(i); else seen.add(k);
+    });
+    if (dels.length) ydoc.transact(() => { for (let i = dels.length - 1; i >= 0; i--) arr.delete(dels[i], 1); });
+  };
+  prune(chatArr, (m) => (m && typeof m === "object" ? m.id : null));
+  prune(dictArr, (w) => (typeof w === "string" ? w : null));
+}
+
 // Runs on every successful (re)sync; bootstraps the UI once the seeded files arrive.
 function onSynced() {
   if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
   setConnState("online", "● online");
+  dedupSharedArrays();           // legacy duplicates die here (and the deletes propagate)
   presenceSig = "";              // a reconnect may have emptied/changed the room → force one redraw
   if (!booted) {
     booted = true;
@@ -2772,7 +3012,7 @@ async function init() {
   provider.awareness.on("change", onAwarenessChange);
 
   // Toolbar + layout (independent of sync).
-  renderTree(); applyLayout(); setupSplitters(); setupProjMenu();
+  renderTree(); applyLayout(); setupSplitters(); setupProjMenu(); setupUpload();
   $("recompile").addEventListener("click", compile);
   $("newFile").addEventListener("click", newFile);
   $("newFolder").addEventListener("click", newFolder);
@@ -2783,10 +3023,11 @@ async function init() {
   });
   $("tabPdf").addEventListener("click", () => showTab("pdf"));
   $("tabLog").addEventListener("click", () => showTab("log"));
-  // Side panels (giro 5): the icon rail swaps what the left column shows.
-  $("railFiles").addEventListener("click", () => setSidePanel("files"));
-  $("railReview").addEventListener("click", () => setSidePanel("review"));
-  $("railChat").addEventListener("click", () => setSidePanel("chat"));
+  // Side panels (giro 5): the icon rail swaps what the left column shows; clicking the
+  // active icon again collapses the whole column (giro 7).
+  $("railFiles").addEventListener("click", () => toggleSidePanel("files"));
+  $("railReview").addEventListener("click", () => toggleSidePanel("review"));
+  $("railChat").addEventListener("click", () => toggleSidePanel("chat"));
   $("revTabOpen").addEventListener("click", () => { reviewFilter = "open"; renderReviewPanel(); });
   $("revTabResolved").addEventListener("click", () => { reviewFilter = "resolved"; renderReviewPanel(); });
   $("chatSend").addEventListener("click", sendChat);
@@ -2809,6 +3050,7 @@ async function init() {
   document.querySelectorAll(".collapse-btn").forEach((b) => b.addEventListener("mousedown", (e) => e.stopPropagation()));
   pagesEl.addEventListener("dblclick", onPdfDblClick);   // inverse search: PDF → source
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("uploadOverlay").hidden) { closeUpload(); return; }
     if (e.key === "Escape" && spellMenuEl && !spellMenuEl.hidden) { closeSpellMenu(); return; }
     if (e.key === "Escape" && commentDom && !commentDom.pop.hidden) { closeCommentOverlays(); return; }
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
