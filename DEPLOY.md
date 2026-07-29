@@ -164,6 +164,13 @@ Sul VPS gira già un **Caddy edge** (container, rete Docker `alum_web`) che serv
 > `Caddyfile.alum-edge` nel repo è una **copia di riferimento**: la fonte di verità è
 > `/opt/alum/caddy/Caddyfile` sul VPS. Se divergono, vince il VPS.
 
+**Tetto di memoria.** `docker-compose.alum.yml` fissa `mem_limit: 1g` (+ `memswap_limit` uguale).
+Il VPS ha 7,8 GiB e ~14 container dietro il Caddy edge: senza limite un runaway di Alumère
+porterebbe giù anche gli altri servizi, col limite l'OOM killer colpisce solo questo container
+(che `restart: unless-stopped` + healthcheck rimettono su). A riposo l'app sta a ~96 MiB
+(`docker stats`), una compilazione LaTeX aggiunge qualche centinaio di MiB. Se una compilazione
+grossa venisse uccisa — **exit code 137** in `docker compose ps` / nei log — alza il valore.
+
 **Backup (stack alum).** I progetti vivono nel volume del servizio. Col compose in `/opt/alum/alumere`
 il nome è tipicamente **`alumere_alumere-data`** (verifica con `docker volume ls`):
 

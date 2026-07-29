@@ -10,6 +10,20 @@ services:
       - PROJECTS_DIR=/app/data/projects
     volumes:
       - alumere-data:/app/data
+    # Tetto di memoria: su questo VPS (7,8 GiB, ~14 container dietro il Caddy edge)
+    # un singolo servizio che va in runaway porterebbe giù anche gli altri. Con il
+    # limite l'OOM killer colpisce SOLO questo container, che `restart: unless-stopped`
+    # + healthcheck rimettono in piedi da soli.
+    # Perché 1g: a riposo l'app sta a ~96 MiB (misurato con `docker stats`), una
+    # compilazione LaTeX ci aggiunge qualche centinaio di MiB → ~10x di margine.
+    # Serve anche da mitigazione per GHSA-xcpc-8h2w-3j85 (adm-zip <0.6.0: uno zip
+    # malevolo su /api/projects/upload o /api/unzip fa allocare 4 GB): sotto questo
+    # tetto l'allocazione muore in fretta e non tocca il resto del VPS.
+    # Se una compilazione grossa venisse uccisa (exit 137 nei log), alza qui il valore.
+    mem_limit: 1g
+    # L'host non ha swap (`free -h` → Swap: 0B): lo fissiamo comunque uguale a
+    # mem_limit, così il tetto resta duro anche se in futuro si abilitasse la swap.
+    memswap_limit: 1g
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

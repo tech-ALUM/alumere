@@ -7,6 +7,53 @@
 
 ---
 
+## 2026-07-29 — VPS ALUM riportato su `main`, redeploy, e chiusura dell'advisory adm-zip ✅
+
+Sessione operativa sul server (`/opt/alum/alumere`), non di sviluppo.
+
+**① Dal branch di deploy a `main`.** La copia sul VPS era su `deploy/alum-server` con un merge di
+`main` **lasciato a metà** (conflitto su questo diario). Merge abortito e `main` portato avanti in
+fast-forward `94dee35..1541753` (48 commit). **Nulla perso**: `deploy/alum-server` aveva un solo
+commit proprio (`3fb21e9`) e il suo contenuto era già su `main` — `docker-compose.alum.yml`
+identico (`git diff` vuoto) e la sezione "Deploy reale su VPS ALUM" già nel diario. Il branch
+resta comunque su locale e su `origin`. Tutti i file di host (Caddy, compose, Dockerfile, `.env`)
+verificati identici byte-per-byte dopo lo switch.
+
+**② `redeploy.sh` versionato** (`0f94247`): girava solo sul server, non tracciato. Contiene i
+safeguard che distinguono QUESTO deploy dagli altri compose del repo (pretende
+`docker-compose.alum.yml` e la rete `alum_web`). **`.env` resta fuori dal repo** — ha
+`SESSION_SECRET` e `SMTP_PASS` valorizzati, su GitHub finirebbero pubblici e nella storia.
+
+**③ Redeploy**: `main` a `1541753` ora live, health locale e pubblico via Caddy entrambi
+`{"ok":true,"engines":[...]}`.
+
+**④ `npm audit` → 1 high, chiusa.** `adm-zip 0.5.18`, dipendenza diretta:
+[GHSA-xcpc-8h2w-3j85](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) (CVSS 7.5, CWE-400/789) —
+uno zip malevolo fa allocare 4 GB. Superficie: `POST /api/projects/upload` (`server.js:756`) e
+`POST /api/unzip` (`server.js:801`), **entrambi dietro `requireUser`** → serve un utente
+autenticato del dominio consentito; impatto solo disponibilità. Il terzo uso
+(`/api/projects/:id/download`, `server.js:832`) è in sola scrittura, non toccato. Due mosse:
+- **`mem_limit: 1g`** su `docker-compose.alum.yml` (vedi DEPLOY.md): mitigazione che vale anche per
+  qualsiasi altro runaway — senza limite un solo servizio poteva portare giù gli altri 13 container
+  del VPS. Nessuna swap sull'host, quindi il tetto è duro.
+- **upgrade a `adm-zip@0.6.0`** (`npm audit` → 0 vulnerabilità). L'unico breaking della 0.6.0 è il
+  comportamento di `extractEntryTo()`, che **non usiamo** (verificato con grep); min Node passa a
+  14, il container gira 22. `npm` non è sull'host: package.json/lock aggiornati con un container
+  `node:22` usa-e-getta (`--package-lock-only`).
+
+**⑤ Due buchi nei test, scoperti qui** (pre-esistenti, non regressioni):
+- **`test/smoke.sh` non gira sull'immagine di produzione.** Esegue `test/collab-edit.mjs`, che
+  importa `@hocuspocus/provider` = **devDependency**, mentre l'immagine è buildata `npm ci
+  --omit=dev` → 6 check falliscono a prescindere (collab + history). Verificato con una prova di
+  controllo: **identico 10/16 anche sull'immagine 0.5.18 pre-upgrade**. Serve un'immagine con le
+  dev-deps (`FROM alumere-app + npm ci`): così **16/16 verdi** col nuovo lock. Nota: il default
+  `IMAGE=alumdocs-app` nell'header dello script punta a un nome d'immagine che su questo VPS non
+  esiste più (`docker images`), quindi `bash test/smoke.sh` senza `IMAGE=` non parte.
+- **lo smoke non copre affatto i percorsi zip** (nessun match per `zip` nello script) — cioè
+  esattamente il codice toccato da questo upgrade. Coperti a mano con un test mirato (10 check:
+  strip della top-folder, sottocartella annidata, binario, filtro `__MACOSX`/`.DS_Store`,
+  round-trip del download con CRC), tutti verdi. **Vale la pena versionarlo** in `test/`.
+
 ## 2026-07-21 — Giro 7: header del tree alla Overleaf + upload (popup e drag&drop) + collasso via rail ⏳ (in attesa del check di Tommy)
 
 Quattro richieste di Tommy (con screenshot di Overleaf come riferimento), lavorate in autonomia
