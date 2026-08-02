@@ -7,6 +7,92 @@
 
 ---
 
+## 2026-08-02 (bis) — Giro 9: ⚙ nel rail, i temi editor di Overleaf, icone ricentrate ⏳ (in attesa del check di Tommy)
+
+Tommy ha messo quattro punti con screenshot alla mano. I primi tre sono piccoli e indipendenti
+e stanno qui; **il quarto** (allineare la barra strumenti al modello Overleaf, log compreso) è
+una ristrutturazione a parte — vedi in fondo. **Niente commit**: aspetta il suo check.
+
+**① La ⚙ scende nel rail, in fondo.** Era nella toolbar in alto; ora vive col resto dei
+pannelli, come su Overleaf. Il rail passa da `<nav class="rail">` a `<div class="rail">` che
+contiene un `<nav class="rail-panels">` (i tre bottoni di pannello, etichetta di accessibilità
+invariata) più la ⚙, tenuta giù da `margin-top:auto`. Sta **fuori** dal `<nav>` di proposito:
+non è un pannello ma un popup, e infatti non prende mai la classe `.active` — verificato.
+Il popup non può scendere verso il basso da lì, quindi si apre **di lato** (`left:100%`) e
+cresce verso l'alto (`bottom:0`). Il cablaggio in `theme.js` è rimasto intatto: cerca
+`#settingsMenu`/`#settingsBtn` per id, non per posizione, quindi la home — che la ⚙ ce l'ha
+ancora in topbar, non avendo un rail — continua a funzionare senza una riga di differenza.
+Il glifo testuale ⚙ è diventato un SVG con lo stesso tratto degli altri tre.
+
+**② I sette temi editor di Overleaf**, presi dai loro veri file CM6
+(`overleaf/overleaf`, `services/web/frontend/js/features/source-editor/themes/cm6/*.json`):
+Eclipse, Overleaf Light, TextMate · Cobalt, Dracula, Monokai, Overleaf Dark. La tendina ora è
+raggruppata **Light / Dark** come la loro, coi nostri quattro in coda a ciascun gruppo (11 in
+totale). Nessun impianto nuovo: il sistema temi era già CSS-only (`body[data-editor-theme]` +
+13 variabili), quindi è stato un lavoro di **mappatura**, non di codice. Due punti dove la
+copia letterale non era possibile, ed è scritto nel CSS:
+- **I token.** Le loro palette sono su tag generici (`keyword`, `string`, `typeName`…), le
+  nostre su ruoli LaTeX. Regola fissa: command←keyword, comment←comment, string←string,
+  number←number (o `literal`), math←`typeName` — l'altro accento del tema, che sta bene
+  sulla matematica — bracket/meta←il tono spento. Dove Overleaf lascia un ruolo senza colore
+  (i numeri di Dracula) si cade sulla palette canonica del tema, non sul testo normale.
+- **`--ed-active-line` deve restare traslucido**, ed è stato **riverificato sul campo** invece
+  che dato per buono: con un colore pieno (`#44475a`, il valore vero di Dracula) una selezione
+  sulla riga del cursore **sparisce del tutto** — il layer di selezione di CodeMirror sta a
+  `z-index:-2`, sotto lo sfondo della riga. Quindi i temi che tingono la riga attiva con un
+  colore pieno (Dracula, Monokai, Overleaf Dark) ricevono l'overlay equivalente. Eclipse a
+  monte non la evidenzia affatto: gliene abbiamo messa una tenue, se no il cursore si perde.
+- Gli id sono anche le chiavi in `localStorage`: una volta usciti non si rinominano, o la
+  scelta salvata di tutti si azzera in silenzio. Il default resta **Pastel Light** — chi non
+  ha mai scelto non si ritrova l'editor cambiato sotto le mani.
+- Provenienza e licenze sono annotate nel blocco CSS: sono temi Ace convertiti da Overleaf,
+  ognuno con la sua licenza nel loro repo; i due "Overleaf Light/Dark" sono roba loro.
+
+**③ Icone ricentrate nei bottoni** della lista progetti. Causa trovata misurando, non a occhio:
+`.row-act` è 28px in `border-box` ma non azzerava il **padding di default del `<button>`**
+(`1px 6px`) — restavano 14px di area utile, l'icona da 16px traboccava e finiva a 7px da
+sinistra e 5px da destra. Sul badge "PDF" (18,8px di testo) era 7 contro 2,2. Un `padding:0`
+e tornano centrate al pixel (L=R=6, T=B=6; misurato, non stimato).
+- **Effetto collaterale scoperto e chiuso**: era proprio quel padding a tenere i bottoni
+  rigidi come flex-item. Tolto, in una finestra stretta si schiacciavano a 18,7px. Serviva
+  anche `flex:0 0 auto`. Beccato per fortuna: il viewport del browser di prova è collassato
+  a zero da solo e ha reso la cosa evidente.
+- Stesso identico difetto su **`.tag-add`** (l'etichetta accanto al nome progetto): 14px in
+  un box da 8px, 6px di sbilanciamento. Sistemato con la stessa riga — è la stessa riga della
+  tabella, sarebbe stato strano lasciarlo storto. Una passata automatica su **tutti** i
+  bottoni-icona delle due pagine ora non trova più niente di scentrato.
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh`
+**22/22**)
+- **⚙ nel rail**: apre col click, chiude cliccando fuori e con Esc (le tre strade di
+  `theme.js`, provate una per una). Popup leggibile anche col **pannello laterale collassato**
+  (galleggia sull'editor: sta nel rail, non nel pannello, quindi il `visibility:hidden` del
+  collasso non lo tocca) e con **Review/Chat** attivi. Mai la classe `.active`.
+- **Temi**: tutte e 11 le palette risolvono davvero le 13 variabili (controllo automatico:
+  nessuna che ricada sui default di `:root` per un blocco CSS mancante o un id scritto male).
+  Guardati a schermo Overleaf Light, Overleaf Dark, Eclipse, TextMate, Cobalt, Monokai: ognuno
+  riconoscibile — Cobalt col suo blu notte e i comandi arancioni, Eclipse col magenta scuro,
+  Monokai col rosa. Scelta salvata e ripresa dopo un reload.
+- **Icone**: L=R e T=B su ogni bottone delle due pagine, larghezza tornata a 28px.
+- Nota di metodo, a correzione del giro 8: le coordinate del tool browser sono nello spazio
+  che il tool stesso dichiara in **"Screenshot size"** (qui 800×500) — l'immagine che si vede
+  è il doppio (retina), quindi va **dimezzata**, non moltiplicata. Tre click a vuoto prima di
+  capirlo, di nuovo.
+
+**Rimandato di proposito → il punto ④, la barra strumenti alla Overleaf.** Oggi Compile e
+Download PDF stanno nella topbar globale e il log è un tab accanto a PDF; Overleaf li mette
+tutti nell'header del pannello PDF, col log come icona a badge (arancione = warning, rosso =
+errori). Il parsing già distingue le due categorie (`parseLatexLog`), oggi però contiamo solo
+gli errori. Da decidere prima di partire: se Compile emigra nell'header, **cosa succede quando
+il pannello PDF è collassato** (oggi il pulsante è sempre raggiungibile); se prendiamo anche
+la navigazione pagine ("6 / 7") e lo zoom a tendina; dove finiscono avatar presenze e il chip
+"Compiled ✓", che Overleaf lì non ha.
+
+⚠️ **Non è live**: file statici, ma serve comunque il pull+rebuild sul VPS (Albi) — che è
+ancora fermo a `1541753`, quindi gli manca anche tutto il giro 8.
+
+---
+
 ## 2026-08-02 — Giro 8: salta-al-collega, preview senza scritta, PDF già pronto all'apertura, nomi progetto unici ⏳ (in attesa del check di Tommy)
 
 Quattro richieste di Tommy in un colpo solo. **Niente commit**: aspetta il suo check.
