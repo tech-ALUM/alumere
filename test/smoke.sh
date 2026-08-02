@@ -103,6 +103,31 @@ npdf=$(curl -s -b "$JAR" -X POST "$BASE/api/compile" -H 'Content-Type: applicati
   | json "len(d['pdf']) if d['ok'] else 0")
 [ "${npdf:-0}" -gt 1000 ] && ok "compile ok (PDF di $npdf byte base64)" || ko "compile fallita o PDF vuoto"
 
+# Last-build cache: a compile that carries projectId leaves the PDF on the project, and
+# GET …/build serves it back. `fresh` says whether it still matches the saved sources —
+# it's what lets the editor skip the recompile on open.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/projects/$pid/build")
+[ "$code" = 404 ] && ok "nessuna build in cache prima della prima compile (404)" || ko "build cache: atteso 404, avuto $code"
+curl -s -b "$JAR" -X POST "$BASE/api/compile" -H 'Content-Type: application/json' \
+  -d "{\"files\":[{\"path\":\"main.tex\",\"content\":\"\\\\documentclass{article}\\\\begin{document}Cache.\\\\end{document}\"}],\"main\":\"main.tex\",\"engine\":\"pdflatex\",\"projectId\":\"$pid\"}" >/dev/null
+build=$(curl -s -b "$JAR" "$BASE/api/projects/$pid/build")
+nb=$(echo "$build" | json "len(d['pdf']) if d['ok'] else 0")
+[ "${nb:-0}" -gt 1000 ] && ok "ultima build servita dalla cache ($nb byte base64)" || ko "build cache vuota dopo la compile"
+fresh=$(echo "$build" | json "d.get('fresh')")
+[ "$fresh" = "True" ] && ok "build marcata fresh (nessun salvataggio dopo la compile)" || ko "build attesa fresh, avuto ${fresh:-nulla}"
+
+echo "— nomi progetto unici"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects" \
+  -H 'Content-Type: application/json' -d '{"name":"Dup Smoke"}')
+[ "$code" = 200 ] && ok "progetto con nome nuovo creato" || ko "creazione progetto: atteso 200, avuto $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects" \
+  -H 'Content-Type: application/json' -d '{"name":"  dup SMOKE "}')
+[ "$code" = 409 ] && ok "nome duplicato rifiutato (409, case-insensitive)" || ko "nome duplicato: atteso 409, avuto $code"
+dupid=$(curl -s -b "$JAR" "$BASE/api/projects" | json "[p['id'] for p in d['projects'] if p['name']=='Dup Smoke'][0]")
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects/$dupid/rename" \
+  -H 'Content-Type: application/json' -d '{"name":"Dup Smoke"}')
+[ "$code" = 200 ] && ok "rinomina allo stesso nome consentita (non è un duplicato di sé)" || ko "rinomina a se stesso: atteso 200, avuto $code"
+
 echo "— gc (passata post-boot sul progetto fixture)"
 for _ in $(seq 1 30); do docker exec $NAME test ! -f "$OBJ/$ORPHAN_SHA" && break; sleep 2; done
 docker exec $NAME test ! -f "$OBJ/$ORPHAN_SHA" && ok "blob orfano rimosso" || ko "blob orfano ancora presente dopo la passata"

@@ -156,8 +156,16 @@ for a trusted group).
   seeded on first run so the library isn't empty.
 - **Storage layout.** Each project is a folder under `PROJECTS_DIR`
   (default `data/projects`): `meta.json` (name + timestamps) and `files/` (the
-  LaTeX tree). In Docker this is a named volume (`alumere-data`), so projects
-  survive restarts and rebuilds.
+  LaTeX tree). Alongside them sit things that are *about* the project but are not
+  sources — `comments.json`, `chat.json`, `dictionary.json`, the Yjs state
+  (`doc.ystate`) and the last successful build (`build.pdf` + `build.synctex.gz` +
+  `build.json`), which is what the editor shows the moment you open a project.
+  Keeping them out of `files/` is deliberate: they must never enter a compile, a
+  zip or a history version. In Docker this is a named volume (`alumere-data`), so
+  projects survive restarts and rebuilds.
+- **Project names are unique.** Creating or renaming a project to a name already
+  in use is refused (case-insensitive). A zip upload auto-suffixes instead —
+  `Thesis (2)` — since the bytes are already on the server.
 - **Saving.** The editor saves to the server with the **Save** button, and also
   auto-saves on every **Recompile** (`Ctrl/Cmd+S`). Binary assets (images) are
   preserved but not editable in the text editor.

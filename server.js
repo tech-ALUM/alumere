@@ -98,6 +98,24 @@ async function writeMeta(id, meta) {
   await writeFile(path.join(projectDir(id), "meta.json"), JSON.stringify(meta, null, 2), "utf8");
 }
 
+// Two projects can't share a display name (the library lists them flat — identical labels
+// would make "which one is it?" a guessing game). Case-insensitive on purpose: "Thesis" and
+// "thesis" would be just as confusing as an exact clone.
+async function findProjectByName(name, exceptId = null) {
+  const want = String(name || "").trim().toLowerCase();
+  if (!want) return null;
+  try {
+    const dirs = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory());
+    for (const d of dirs) {
+      if (d.name === exceptId) continue;
+      const meta = await readMeta(d.name);
+      if (meta && String(meta.name || "").trim().toLowerCase() === want) return meta;
+    }
+  } catch {}
+  return null;
+}
+const nameTakenError = (name) => `A project named "${name}" already exists — pick a different name.`;
+
 // ---------- session helpers ----------
 const SYSTEM_USER = { id: "system", name: "Alumère (system)" };
 const briefUser = (u) => (u ? { id: u.id, name: u.name } : null);
@@ -666,6 +684,7 @@ app.put("/api/projects/:id", requireUser, async (req, res) => {
   if (!meta) return res.status(404).json({ ok: false, error: "not found" });
   const { files, name } = req.body || {};
   try {
+    if (name && (await findProjectByName(name, id))) return res.status(409).json({ ok: false, error: nameTakenError(name) });
     await writeFiles(id, files);
     // files/ was rewritten OUTSIDE the doc: the saved Yjs state is stale now — drop it
     // so the next open re-seeds from disk instead of resurrecting the old content.
@@ -690,6 +709,7 @@ app.post("/api/projects/:id/rename", requireUser, async (req, res) => {
   const name = String((req.body || {}).name || "").trim().slice(0, 120);
   if (!name) return res.status(400).json({ ok: false, error: "empty name" });
   try {
+    if (await findProjectByName(name, id)) return res.status(409).json({ ok: false, error: nameTakenError(name) });
     meta.name = name;
     await writeMeta(id, meta);
     res.json({ ok: true, name });
@@ -715,6 +735,7 @@ app.post("/api/projects", requireUser, async (req, res) => {
   const name = String((req.body || {}).name || "").trim().slice(0, 120) || "New project";
   const id = crypto.randomUUID();
   try {
+    if (await findProjectByName(name)) return res.status(409).json({ ok: false, error: nameTakenError(name) });
     const main = [
       "\\documentclass[11pt]{article}",
       "\\usepackage[utf8]{inputenc}",
@@ -780,7 +801,12 @@ app.post("/api/projects/upload", requireUser, async (req, res) => {
     if (!wrote) { await rm(projectDir(id), { recursive: true, force: true }); return res.status(400).json({ ok: false, error: "empty or invalid zip" }); }
 
     const now = new Date().toISOString();
-    const meta = { id, name: (name || "Untitled project").replace(/\.zip$/i, "").slice(0, 120), createdAt: now, updatedAt: now, createdBy: briefUser(req.user), updatedBy: briefUser(req.user) };
+    // The name comes from the zip's filename and the bytes are already here — a 409 would
+    // force a rename-and-reupload round-trip, so this path auto-suffixes "(2)" instead.
+    const base = String(name || "Untitled project").replace(/\.zip$/i, "").trim().slice(0, 114) || "Untitled project";
+    let pname = base;
+    for (let n = 2; await findProjectByName(pname); n++) pname = `${base} (${n})`;
+    const meta = { id, name: pname, createdAt: now, updatedAt: now, createdBy: briefUser(req.user), updatedBy: briefUser(req.user) };
     await writeMeta(id, meta);
     res.json({ ok: true, id, name: meta.name });
   } catch (e) {
@@ -1116,6 +1142,44 @@ app.post("/api/projects/:id/mentions", requireUser, async (req, res) => {
 });
 
 // ---------- compile (compiles the files sent inline; stateless temp dir) ----------
+// The compile itself stays stateless, but the RESULT of the last successful one is kept
+// per project (build.pdf + build.synctex.gz + build.json next to meta.json, outside files/:
+// a build artifact is not a source — it must not enter zips, history or the Yjs doc). The
+// editor fetches it on open, so a project greets you with its last PDF instead of an empty
+// pane until the first compile of the day. Best-effort by design: a failed save must never
+// fail the compile that produced it.
+const buildPdfPath = (id) => path.join(projectDir(id), "build.pdf");
+const buildSynctexPath = (id) => path.join(projectDir(id), "build.synctex.gz");
+const buildMetaPath = (id) => path.join(projectDir(id), "build.json");
+async function saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot, by }) {
+  try {
+    if (!projectId || !validId(projectId) || !(await readMeta(projectId))) return;
+    await writeFile(buildPdfPath(projectId), pdf);
+    if (synctexBuf) await writeFile(buildSynctexPath(projectId), synctexBuf);
+    else await rm(buildSynctexPath(projectId), { force: true });
+    await writeFile(buildMetaPath(projectId), JSON.stringify({ at: new Date().toISOString(), engine, synctexRoot, by }, null, 2), "utf8");
+  } catch (e) { console.warn(`[alumere][build] couldn't save the last build of ${projectId}: ${e.message}`); }
+}
+
+// Last successful build of a project (404 until someone compiles it once). Same JSON shape
+// as a live /api/compile response, so the client can feed both to the same code path.
+app.get("/api/projects/:id/build", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  try {
+    const info = JSON.parse(await readFile(buildMetaPath(id), "utf8"));
+    const pdf = await readFile(buildPdfPath(id));
+    let synctex = null;
+    try { synctex = (await readFile(buildSynctexPath(id))).toString("base64"); } catch {}
+    // `fresh` = no content save since this build (ISO strings compare lexicographically).
+    // The editor uses it to skip the open-time recompile: same sources → same PDF.
+    const fresh = !!(info.at && (!meta.updatedAt || info.at >= meta.updatedAt));
+    res.json({ ok: true, pdf: pdf.toString("base64"), synctex, synctexRoot: info.synctexRoot || "", at: info.at, engine: info.engine, fresh });
+  } catch { res.status(404).json({ ok: false, error: "no build yet" }); }
+});
+
 function runLatexmk(cwd, mainFile, engineFlag) {
   return new Promise((resolve) => {
     const args = [engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-synctex=1", "-no-shell-escape", mainFile];
@@ -1131,7 +1195,7 @@ function runLatexmk(cwd, mainFile, engineFlag) {
 }
 
 app.post("/api/compile", requireUser, async (req, res) => {
-  const { files, main = "main.tex", engine = "xelatex" } = req.body || {};
+  const { files, main = "main.tex", engine = "xelatex", projectId } = req.body || {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ ok: false, log: "No files were sent to compile." });
   const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.xelatex;
   let dir;
@@ -1153,7 +1217,9 @@ app.post("/api/compile", requireUser, async (req, res) => {
       // SyncTeX map (editor ⇄ PDF positions), parsed client-side. Its Input records
       // point into the temp dir, so ship the dir too for path normalisation.
       const syncPath = path.join(dir, mainRel.replace(/\.tex$/i, ".synctex.gz"));
-      const synctex = existsSync(syncPath) ? (await readFile(syncPath)).toString("base64") : null;
+      const synctexBuf = existsSync(syncPath) ? await readFile(syncPath) : null;
+      const synctex = synctexBuf ? synctexBuf.toString("base64") : null;
+      await saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot: dir, by: briefUser(req.user) });
       return res.json({ ok: true, log, pdf: pdf.toString("base64"), synctex, synctexRoot: dir });
     }
     return res.json({ ok: false, log: log || "No PDF was produced. Check the log for LaTeX errors.", code });

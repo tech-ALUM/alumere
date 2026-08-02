@@ -93,7 +93,7 @@ function colorFor(seed) {
 const $ = (id) => document.getElementById(id);
 const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
 const tabbarListEl = $("tabbarList"), editorEmptyEl = $("editorEmpty"), presenceEl = $("presence");
-const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues"), previewEmpty = $("previewEmpty");
+const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues");
 const pdfScroll = $("pdfScroll"), pdfSizer = $("pdfSizer"), pagesEl = $("pdfPages");
 const previewBody = document.querySelector(".preview-body");
 const engineSel = $("engine");
@@ -850,10 +850,13 @@ function renderIssues(issues) {
 }
 
 let pdfBlob = null;
+let compileStarted = false;   // once a real compile begins, the cached build must not apply
 async function compile() {
+  compileStarted = true;
   setStatus("busy", "Compiling…");
   const files = flattenForCompile();
-  const payload = { files, main: detectMain(files), engine: engineSel.value };
+  // projectId lets the server keep this build as the project's "last PDF" (shown on open).
+  const payload = { files, main: detectMain(files), engine: engineSel.value, projectId: PROJECT_ID };
   try {
     const res = await fetch("/api/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json();
@@ -862,7 +865,6 @@ async function compile() {
     renderIssues(issues);
     if (data.ok && data.pdf) {
       pdfBlob = b64ToBlob(data.pdf, "application/pdf");
-      previewEmpty.classList.add("hidden");
       showTab("pdf");                                  // reveal the pane before we measure it
       try { await loadPdf(data.pdf); }                 // base64 → PDF.js canvases
       catch (err) { console.warn("PDF render failed:", err); }
@@ -881,13 +883,37 @@ async function compile() {
   }
 }
 
+// Last successful compile of this project (by anyone): fetched on open, so the preview
+// greets you with the latest PDF instead of an empty pane while latexmk grinds. `fresh`
+// (from the server) = no content save since that build — then the open-time auto-compile
+// is skipped entirely: same sources, same PDF. Stale → the cached PDF still shows first
+// and the auto-compile replaces it when it lands (see onSynced, which awaits this promise
+// before deciding). If the USER starts a compile before the cached bytes arrive, the cache
+// stands down: a live result — even a failed one showing its log — outranks yesterday's PDF.
+let cachedBuildPromise = null;                         // init() kicks it off; onSynced awaits it
+async function loadCachedBuild() {
+  try {
+    const r = await fetch(`/api/projects/${PROJECT_ID}/build`);
+    if (!r.ok) return null;                            // 404 = never compiled, fine
+    const data = await r.json();
+    if (!data.ok || !data.pdf || compileStarted) return null;
+    pdfBlob = b64ToBlob(data.pdf, "application/pdf");
+    showTab("pdf");                                    // reveal the pane before we measure it
+    try { await loadPdf(data.pdf); }
+    catch (err) { console.warn("Cached PDF render failed:", err); return null; }
+    if (compileStarted) return null;                   // a compile landed while we rendered
+    await loadSyncTex(data.synctex, data.synctexRoot);
+    showTab("pdf");                                    // pdfDoc is set now → the zoom bar shows
+    if (data.fresh) setStatus("ok", "Compiled ✓");     // truthful: this IS the current sources' PDF
+    return { fresh: !!data.fresh };
+  } catch { return null; }                             // best-effort: no cache, no drama
+}
+
 // ---------- Preview tabs ----------
 function showTab(which) {
   const pdf = which === "pdf";
   pdfScroll.classList.toggle("hidden", !pdf);
   logWrap.classList.toggle("hidden", pdf);
-  if (pdf) previewEmpty.classList.toggle("hidden", !!pdfDoc);
-  else previewEmpty.classList.add("hidden");
   $("tabPdf").classList.toggle("active", pdf);
   $("tabLog").classList.toggle("active", !pdf);
   $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfDoc);
@@ -2380,6 +2406,41 @@ function onAwarenessChange() {
   renderPresence(peers);
   renderTree();                              // file rows carry "who's in here" markers
 }
+// Where is this person right now? Their active file, plus their cursor when awareness
+// carries one (yCollab publishes it as Yjs relative positions — they survive concurrent
+// edits by design, so decoding against the live doc lands on the character they're on,
+// not on a stale offset). Someone with several tabs open: the tab with a cursor wins.
+function peerLocation(personKey) {
+  if (!provider) return null;
+  let best = null;
+  for (const [clientId, st] of provider.awareness.getStates()) {
+    const u = st && st.user;
+    if (!u || (u.id || `client:${clientId}`) !== personKey) continue;
+    const file = st.activeFile;
+    if (!file || !hasPath(file)) continue;
+    let index = null;
+    const rel = st.cursor && (st.cursor.head || st.cursor.anchor);
+    if (rel && !isBinaryVal(filesMap.get(file))) {
+      try {
+        const abs = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(rel), ydoc);
+        if (abs && abs.type === filesMap.get(file)) index = abs.index;
+      } catch {}
+    }
+    if (!best || (best.index == null && index != null)) best = { file, index };
+  }
+  return best;
+}
+function gotoPeer(p) {
+  const loc = peerLocation(p.key);
+  if (!loc) return;                                  // no file we know of → nothing to jump to
+  if (currentPath !== loc.file) openFile(loc.file);
+  else revealEditor();                               // same file, maybe collapsed editor
+  if (view && loc.index != null) {
+    const pos = Math.min(loc.index, view.state.doc.length);
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  }
+}
 function renderPresence(peers = peerList()) {
   if (!presenceEl) return;
   presenceEl.innerHTML = "";
@@ -2387,6 +2448,16 @@ function renderPresence(peers = peerList()) {
   shown.forEach((p, i) => {
     const el = avatarEl(p);
     el.style.zIndex = String(MAX_AVATARS + 1 - i);   // the overlapping stack reads left-over-right
+    // A peer's avatar is also a teleport: click → their file, at their cursor. Not mine —
+    // I'm already where I am. The tooltip doubles as the hint (and says where they are).
+    if (!p.isMe) {
+      const files = [...p.activeFiles].sort();
+      if (files.length) el.dataset.name = `${p.name} — in ${files.join(", ")} · click to follow`;
+      el.setAttribute("aria-label", el.dataset.name);   // keep the tooltip and the a11y name in step
+      el.classList.add("avatar-go");
+      el.setAttribute("role", "button");
+      el.addEventListener("click", () => gotoPeer(p));
+    }
     presenceEl.appendChild(el);
   });
   const extra = peers.slice(MAX_AVATARS);
@@ -2474,7 +2545,12 @@ function onSynced() {
     // counting from messages that arrive live.
     updateRailBadges();
     renderChat();
-    compile();
+    // Open-time compile, but only when it would produce something new: wait for the cached
+    // build (it shows instantly), and recompile just if it's stale — or absent. Sequencing
+    // through the promise also means cache and compile can never race each other's render.
+    Promise.resolve(cachedBuildPromise).then((cached) => {
+      if (!compileStarted && !(cached && cached.fresh)) compile();
+    });
   }
   onAwarenessChange();           // booted by now, so this actually paints the strip + markers
 }
@@ -3012,6 +3088,7 @@ async function init() {
   provider.awareness.on("change", onAwarenessChange);
 
   // Toolbar + layout (independent of sync).
+  cachedBuildPromise = loadCachedBuild();   // the last compiled PDF, while we sync
   renderTree(); applyLayout(); setupSplitters(); setupProjMenu(); setupUpload();
   $("recompile").addEventListener("click", compile);
   $("newFile").addEventListener("click", newFile);
