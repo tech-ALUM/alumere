@@ -29,8 +29,37 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       </button>
       <button id="download" class="btn" title="Download the compiled PDF">Download PDF</button>
       <button id="history" class="btn" title="Project version history"><span class="ic">🕘</span> History</button>
-      <div class="menu" id="settingsMenu">
-        <button id="settingsBtn" class="btn" title="Settings (LaTeX engine, editor theme)" aria-haspopup="true">⚙</button>
+      <div id="presence" class="presence" aria-label="Who's online in this project"></div>
+      <span id="collabState" class="status idle" title="Real-time collaboration status">…</span>
+      <span id="status" class="status idle">Ready</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- Icon rail (giro 5): switches WHICH panel occupies the left column. One panel at a
+         time — the hidden ones leave the grid entirely (.pane[hidden] → display:none).
+         Settings (giro 9) rides at the bottom of the same rail, Overleaf-style: it's a
+         popup, not a panel, so it sits outside the <nav> and never takes the .active state. -->
+    <div class="rail">
+      <nav class="rail-panels" aria-label="Side panels">
+        <button id="railFiles" class="rail-btn active" type="button" title="Project files">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H5a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 5 16h8a1.5 1.5 0 0 0 1.5-1.5V6.5z"/><path d="M10 2v4.5h4.5"/></svg>
+        </button>
+        <button id="railReview" class="rail-btn" type="button" title="Review — comments on the text">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 11a1.8 1.8 0 0 1-1.8 1.8H6.5L2.5 16V4.3a1.8 1.8 0 0 1 1.8-1.8h9.4a1.8 1.8 0 0 1 1.8 1.8z"/><path d="M5.8 6.4h6.4M5.8 9.2h4.2"/></svg>
+          <span class="rail-badge" id="reviewBadge" hidden></span>
+        </button>
+        <button id="railChat" class="rail-btn" type="button" title="Chat with your collaborators">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 11.3H4.6L2 13.6V4.9a1.6 1.6 0 0 1 1.6-1.6h7a1.6 1.6 0 0 1 1.6 1.6v1"/><path d="M7.4 8.2a1.6 1.6 0 0 1 1.6-1.6h5.4A1.6 1.6 0 0 1 16 8.2v7.3l-2.6-2.3H9a1.6 1.6 0 0 1-1.6-1.6z"/></svg>
+          <span class="rail-badge" id="chatBadge" hidden></span>
+        </button>
+      </nav>
+
+      <div class="menu rail-menu" id="settingsMenu">
+        <button id="settingsBtn" class="rail-btn" type="button" aria-haspopup="true"
+                title="Settings — LaTeX engine, editor theme, appearance">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="4.6"/><circle cx="9" cy="9" r="1.8"/><path d="M9 4.4V2.4M9 13.6v2M13.6 9h2M4.4 9h-2M12.25 5.75 13.7 4.3M5.75 12.25 4.3 13.7M12.25 12.25l1.45 1.45M5.75 5.75 4.3 4.3"/></svg>
+        </button>
         <div class="menu-pop" hidden>
           <label>LaTeX engine
             <select id="engine">
@@ -51,28 +80,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
           </label>
         </div>
       </div>
-      <div id="presence" class="presence" aria-label="Who's online in this project"></div>
-      <span id="collabState" class="status idle" title="Real-time collaboration status">…</span>
-      <span id="status" class="status idle">Ready</span>
     </div>
-  </header>
-
-  <main class="workspace">
-    <!-- Icon rail (giro 5): switches WHICH panel occupies the left column. One panel at a
-         time — the hidden ones leave the grid entirely (.pane[hidden] → display:none). -->
-    <nav class="rail" aria-label="Side panels">
-      <button id="railFiles" class="rail-btn active" type="button" title="Project files">
-        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H5a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 5 16h8a1.5 1.5 0 0 0 1.5-1.5V6.5z"/><path d="M10 2v4.5h4.5"/></svg>
-      </button>
-      <button id="railReview" class="rail-btn" type="button" title="Review — comments on the text">
-        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 11a1.8 1.8 0 0 1-1.8 1.8H6.5L2.5 16V4.3a1.8 1.8 0 0 1 1.8-1.8h9.4a1.8 1.8 0 0 1 1.8 1.8z"/><path d="M5.8 6.4h6.4M5.8 9.2h4.2"/></svg>
-        <span class="rail-badge" id="reviewBadge" hidden></span>
-      </button>
-      <button id="railChat" class="rail-btn" type="button" title="Chat with your collaborators">
-        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 11.3H4.6L2 13.6V4.9a1.6 1.6 0 0 1 1.6-1.6h7a1.6 1.6 0 0 1 1.6 1.6v1"/><path d="M7.4 8.2a1.6 1.6 0 0 1 1.6-1.6h5.4A1.6 1.6 0 0 1 16 8.2v7.3l-2.6-2.3H9a1.6 1.6 0 0 1-1.6-1.6z"/></svg>
-        <span class="rail-badge" id="chatBadge" hidden></span>
-      </button>
-    </nav>
 
     <section class="pane files" id="filesPane">
       <div class="pane-head">

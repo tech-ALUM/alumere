@@ -204,6 +204,11 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
   background: var(--panel-2); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0;
 }
+.rail-panels { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+/* Settings (giro 9): pinned to the foot of the rail. Its popup can't drop downwards from
+   here, so it opens sideways over the file tree and grows upwards from the button. */
+.rail-menu { margin-top: auto; }
+.rail-menu .menu-pop { top: auto; bottom: 0; left: calc(100% + 8px); right: auto; }
 .rail-btn {
   position: relative; width: 34px; height: 34px; border-radius: 8px; border: 0; cursor: pointer;
   display: grid; place-items: center; background: none; color: var(--muted);
@@ -594,7 +599,12 @@ body.dragging .pdf-scroll { pointer-events: none; }
 .c-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .row-act {
   position: relative;
-  width: 28px; height: 28px; display: grid; place-items: center;
+  /* padding:0 is load-bearing — without it the browser's default button padding (1px 6px)
+     leaves a 14px content box inside these 28px buttons, the 16px icon (and the wider "PDF"
+     badge) overflows it, and the glyph ends up visibly off-centre. flex:0 0 auto goes with
+     it: the padding used to be what kept these flex items from shrinking, so without both
+     they squash below 28px in a narrow window. */
+  width: 28px; height: 28px; padding: 0; flex: 0 0 auto; display: grid; place-items: center;
   border: 1px solid transparent; border-radius: 7px; background: transparent;
   font-size: 13px; line-height: 1; color: var(--muted);
 }
@@ -677,7 +687,8 @@ body.dragging .pdf-scroll { pointer-events: none; }
 .proj-row:hover .tag-chip .tag-x { opacity: .55; width: auto; padding-left: 1px; }
 .tag-chip .tag-x:hover { opacity: 1; color: var(--coral); }
 .tag-add {
-  flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center;
+  /* padding:0 for the same reason as .row-act — a 14px icon in an 8px content box */
+  flex: 0 0 auto; width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted);
   opacity: 0; transition: opacity .12s;
 }
@@ -726,6 +737,23 @@ body.dragging .pdf-scroll { pointer-events: none; }
      1) add a  body[data-editor-theme="<id>"]  block below with the same vars
      2) add  { id:"<id>", label:"<Name>" }  to PALETTES in public/app.js
    Only the editor surface + syntax tokens are themed; the app chrome is fixed.
+
+   The first seven are Overleaf's own editor themes, ported from their CodeMirror 6
+   definitions (overleaf/overleaf, services/web/frontend/js/features/source-editor/
+   themes/cm6/*.json). All but "Overleaf Light/Dark" are Ace themes Overleaf converted;
+   each ships its own licence there. Surface colours (background, gutter, selection,
+   cursor) are theirs verbatim. Two places where a literal copy isn't possible:
+
+   · TOKENS. Their palettes are keyed on generic CodeMirror tags (keyword, string,
+     typeName…), ours on LaTeX roles. The mapping is command←keyword, comment←comment,
+     string←string, number←number (else literal), math←typeName — the theme's other
+     accent, which suits inline math — and bracket/meta←the theme's muted tone. Where
+     Overleaf leaves a role unstyled we fall back to the theme's canonical palette
+     (Dracula numbers) rather than to plain foreground.
+   · --ed-active-line MUST stay translucent (see the note below), so the themes that
+     highlight the caret line with a solid colour (Dracula, Monokai, Overleaf Dark)
+     get the equivalent overlay instead. Eclipse doesn't highlight it at all upstream;
+     we add a faint one so the caret line stays findable.
    ==================================================================== */
 :root{
   --ed-bg:#ffffff; --ed-fg:#243240;
@@ -768,6 +796,68 @@ body[data-editor-theme="nord"]{
   --ed-selection:#434c5e; --ed-cursor:#88c0d0;
   --ed-tok-command:#a3be8c; --ed-tok-comment:#616e88; --ed-tok-string:#ebcb8b;
   --ed-tok-number:#b48ead; --ed-tok-math:#81a1c1; --ed-tok-bracket:#7b8392; --ed-tok-meta:#8893a3;
+}
+
+/* --- Overleaf's themes (see the note above) — light --- */
+body[data-editor-theme="eclipse"]{
+  --ed-bg:#ffffff; --ed-fg:#000000;
+  --ed-gutter-bg:#ebebeb; --ed-gutter-fg:#888888;
+  --ed-active-line:rgba(0,0,0,.05); --ed-active-gutter:#dadada;
+  --ed-selection:#b5d5ff; --ed-cursor:#000000;
+  --ed-tok-command:#7f0055; --ed-tok-comment:#719682; --ed-tok-string:#2a00ff;
+  --ed-tok-number:#00008b; --ed-tok-math:#7f007f; --ed-tok-bracket:#7f7f7f; --ed-tok-meta:#888888;
+}
+body[data-editor-theme="overleaf"]{
+  --ed-bg:#ffffff; --ed-fg:#000000;
+  --ed-gutter-bg:#f0f0f0; --ed-gutter-fg:#333333;
+  --ed-active-line:rgba(0,0,0,.07); --ed-active-gutter:#dcdcdc;
+  --ed-selection:#b5d5ff; --ed-cursor:#000000;
+  /* Overleaf Light really is this frugal: one colour for keywords, one for literals,
+     one for comments. Math and strings share a hue upstream too — not a mistake here. */
+  --ed-tok-command:#3f7f7f; --ed-tok-comment:#0080ff; --ed-tok-string:#5a5cad;
+  --ed-tok-number:#5a5cad; --ed-tok-math:#5a5cad; --ed-tok-bracket:#808080; --ed-tok-meta:#666666;
+}
+body[data-editor-theme="textmate"]{
+  --ed-bg:#ffffff; --ed-fg:#000000;
+  --ed-gutter-bg:#f0f0f0; --ed-gutter-fg:#333333;
+  --ed-active-line:rgba(0,0,0,.07); --ed-active-gutter:#dcdcdc;
+  --ed-selection:#b5d5ff; --ed-cursor:#000000;
+  --ed-tok-command:#0000ff; --ed-tok-comment:#4c886b; --ed-tok-string:#036a07;
+  --ed-tok-number:#833fba; --ed-tok-math:#318495; --ed-tok-bracket:#687687; --ed-tok-meta:#687687;
+}
+
+/* --- Overleaf's themes — dark --- */
+body[data-editor-theme="cobalt"]{
+  --ed-bg:#002240; --ed-fg:#ffffff;
+  --ed-gutter-bg:#011e3a; --ed-gutter-fg:#8091a0;
+  --ed-active-line:rgba(0,0,0,.35); --ed-active-gutter:rgba(0,0,0,.35);
+  --ed-selection:rgba(179,101,57,.75); --ed-cursor:#ffffff;
+  --ed-tok-command:#ff9d00; --ed-tok-comment:#0088ff; --ed-tok-string:#3ad900;
+  --ed-tok-number:#ff628c; --ed-tok-math:#ffee80; --ed-tok-bracket:#cccccc; --ed-tok-meta:#8091a0;
+}
+body[data-editor-theme="dracula"]{
+  --ed-bg:#282a36; --ed-fg:#f8f8f2;
+  --ed-gutter-bg:#282a36; --ed-gutter-fg:#909194;
+  --ed-active-line:rgba(68,71,90,.5); --ed-active-gutter:#44475a;
+  --ed-selection:#44475a; --ed-cursor:#f8f8f0;
+  --ed-tok-command:#ff79c6; --ed-tok-comment:#6272a4; --ed-tok-string:#f1fa8c;
+  --ed-tok-number:#bd93f9; --ed-tok-math:#8be9fd; --ed-tok-bracket:#909194; --ed-tok-meta:#909194;
+}
+body[data-editor-theme="monokai"]{
+  --ed-bg:#272822; --ed-fg:#f8f8f2;
+  --ed-gutter-bg:#2f3129; --ed-gutter-fg:#8f908a;
+  --ed-active-line:rgba(0,0,0,.28); --ed-active-gutter:#272727;
+  --ed-selection:#49483e; --ed-cursor:#f8f8f0;
+  --ed-tok-command:#f92672; --ed-tok-comment:#75715e; --ed-tok-string:#e6db74;
+  --ed-tok-number:#ae81ff; --ed-tok-math:#66d9ef; --ed-tok-bracket:#f8f8f2; --ed-tok-meta:#8f908a;
+}
+body[data-editor-theme="overleaf-dark"]{
+  --ed-bg:#1b222c; --ed-fg:#f8f8f2;
+  --ed-gutter-bg:#1b222c; --ed-gutter-fg:#909194;
+  --ed-active-line:rgba(68,71,90,.5); --ed-active-gutter:#44475a;
+  --ed-selection:#44475a; --ed-cursor:#f8f8f0;
+  --ed-tok-command:#ff79c6; --ed-tok-comment:#6272a4; --ed-tok-string:#f1fa8c;
+  --ed-tok-number:#bd93f9; --ed-tok-math:#8be9fd; --ed-tok-bracket:#909194; --ed-tok-meta:#909194;
 }
 
 /* editor surface driven by the variables above (two-class selectors so they win) */

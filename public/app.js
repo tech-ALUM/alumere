@@ -107,12 +107,27 @@ const pendingFolders = new Set();  // empty folders created locally (not shared 
 
 // ---------- Editor colour palettes ----------
 // Add a palette here AND a matching  body[data-editor-theme="<id>"]  block in styles.css.
+// Grouped light/dark the way Overleaf groups its own picker; theirs come first in each
+// group, ours after. The ids are also the localStorage values, so they never change once
+// shipped — renaming one would silently reset everybody's saved choice.
 const PALETTES = [
-  { id: "light",     label: "Pastel Light" },
-  { id: "dark",      label: "Slate Dark" },
-  { id: "solarized", label: "Solarized" },
-  { id: "nord",      label: "Nord" },
+  { group: "Light themes", items: [
+    { id: "eclipse",       label: "Eclipse" },
+    { id: "overleaf",      label: "Overleaf Light" },
+    { id: "textmate",      label: "TextMate" },
+    { id: "light",         label: "Pastel Light" },
+    { id: "solarized",     label: "Solarized" },
+  ] },
+  { group: "Dark themes", items: [
+    { id: "cobalt",        label: "Cobalt" },
+    { id: "dracula",       label: "Dracula" },
+    { id: "monokai",       label: "Monokai" },
+    { id: "overleaf-dark", label: "Overleaf Dark" },
+    { id: "dark",          label: "Slate Dark" },
+    { id: "nord",          label: "Nord" },
+  ] },
 ];
+const PALETTE_IDS = PALETTES.flatMap((g) => g.items.map((p) => p.id));
 const THEME_KEY = "alumere.editorTheme";
 function applyEditorTheme(id) {
   document.body.dataset.editorTheme = id;
@@ -122,14 +137,19 @@ function initEditorTheme() {
   const sel = $("editorTheme");
   if (sel) {
     sel.innerHTML = "";
-    for (const p of PALETTES) {
-      const o = document.createElement("option");
-      o.value = p.id; o.textContent = p.label; sel.appendChild(o);
+    for (const g of PALETTES) {
+      const grp = document.createElement("optgroup");
+      grp.label = g.group;
+      for (const p of g.items) {
+        const o = document.createElement("option");
+        o.value = p.id; o.textContent = p.label; grp.appendChild(o);
+      }
+      sel.appendChild(grp);
     }
   }
   let saved = "light";
   try { saved = localStorage.getItem(THEME_KEY) || "light"; } catch {}
-  if (!PALETTES.some((p) => p.id === saved)) saved = "light";
+  if (!PALETTE_IDS.includes(saved)) saved = "light";
   if (sel) { sel.value = saved; sel.addEventListener("change", () => applyEditorTheme(sel.value)); }
   applyEditorTheme(saved);
 }
