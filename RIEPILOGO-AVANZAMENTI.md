@@ -7,6 +7,82 @@
 
 ---
 
+## 2026-08-02 — Giro 8: salta-al-collega, preview senza scritta, PDF già pronto all'apertura, nomi progetto unici ⏳ (in attesa del check di Tommy)
+
+Quattro richieste di Tommy in un colpo solo. **Niente commit**: aspetta il suo check.
+
+**① Click sull'avatar di un collega → si salta dove sta lui.** L'avatar nella toolbar era solo
+informativo; ora quello **degli altri** (non il proprio) è un teletrasporto: apre il suo file e ci
+porta il cursore. La posizione arriva da due campi di awareness già pubblicati — `activeFile`
+(nostro, da `openFile`) e `cursor` (di yCollab). Il secondo è in **relative-position Yjs**, quindi
+si decodifica contro il doc vivo e atterra sul carattere giusto anche se nel frattempo il testo si
+è mosso; se manca (peer appena entrato, file binario) si apre comunque il file. Un collega con più
+tab aperti: vince il tab che ha un cursore. Il tooltip ora dice anche **dove** sta ("Paolo Rossi —
+in sections/math.tex · click to follow") e l'`aria-label` lo segue. Editor collassato → il salto lo
+riapre (`revealEditor`, come già fanno errori e card di review).
+
+**② Via "Press Compile to generate the PDF"** dalla preview: rimossi `#previewEmpty` e la sua
+regola CSS, e le tre righe che lo mostravano/nascondevano in `compile()` e `showTab()`. Resta il
+fondo grigio della preview, com'è stato chiesto.
+
+**③ Il PDF c'è già quando apri il progetto.** Prima ogni apertura ripartiva da zero: pannello
+vuoto finché latexmk non finiva. Ora l'ultima compilazione **riuscita** viene tenuta per progetto —
+`build.pdf` + `build.synctex.gz` + `build.json` accanto a `meta.json`, **fuori da `files/`**: un
+artefatto di build non è un sorgente e non deve entrare in compile, zip o history (stessa logica di
+`comments.json`/`chat.json`). `/api/compile` la salva quando riceve il nuovo campo `projectId`
+(best-effort: se il salvataggio fallisce la compile resta valida), e `GET /api/projects/:id/build`
+la restituisce con la stessa forma JSON di una compile vera, così il client la dà in pasto allo
+stesso codice.
+- Il server marca la build **`fresh`** confrontando il suo timestamp con `updatedAt` del progetto:
+  se nessuno ha salvato da allora, il PDF **è** quello dei sorgenti correnti → l'auto-compile
+  all'apertura **si salta del tutto** (apertura istantanea, niente latexmk inutile). Stale → il PDF
+  vecchio si vede subito e la compile lo sostituisce quando arriva.
+- Le corse sono chiuse in un punto solo: `onSynced` **aspetta la promise** della cache prima di
+  decidere, e un `compileStarted` fa stare la cache in disparte se l'utente ha già premuto Compile —
+  un risultato vero, anche fallito col suo log, batte sempre il PDF di ieri.
+- Effetto collaterale gradito: **Download PDF** funziona appena aperto il progetto (`pdfBlob` è già
+  pieno), e il synctex della cache alimenta subito le frecce forward/inverse.
+
+**④ Due progetti non possono avere lo stesso nome.** Un solo controllo condiviso
+(`findProjectByName`, case-insensitive e trim) su **create**, **rename** e il PUT legacy → **409**
+con messaggio leggibile; il client mostra già `data.error`, quindi niente da cambiare lì.
+L'**upload di uno zip** fa eccezione di proposito: i byte sono già sul server, un 409 costringerebbe
+a rinominare e ricaricare tutto, quindi auto-suffissa `Thesis (2)`, `(3)`… La rinomina **allo stesso
+nome** resta lecita (l'`exceptId` esclude il progetto da sé stesso) — serve per cambiare solo le
+maiuscole.
+
+**Verificato** (dev :3000, browser reale, due utenti veri via magic-link, chiaro + scuro, console
+pulita, `test/smoke.sh` **22/22**)
+- **Salto**: DemoAccount messo a fine riga 7 di `math.tex`, Paolo su `main.tex` riga 1 → click
+  sull'avatar DA dal tab di Paolo → **cambia file** (main→math) e cursore a **offset 18**, cioè
+  esattamente sul caret di DemoAccount (column-aware, non solo la riga). Il proprio avatar non è
+  cliccabile (niente classe, niente listener, cursore normale). Editor collassato → riaperto dal
+  salto. Tooltip col file giusto in entrambi i tab.
+- **Preview**: `#previewEmpty` non esiste più nel DOM, `.preview-body` resta sul suo grigio.
+- **Cache**: progetto già compilato → riapertura con PDF **immediato** e stato "Compiled ✓", e
+  `build.pdf` **non riscritto** (mtime fermo) = nessun latexmk inutile. Poi un edit vero (salvato,
+  `updatedAt` avanzato) → riapertura: PDF vecchio subito, auto-compile parte, `build.json` aggiornato
+  al secondo. Progetto nuovo: 404 sulla cache, compile normale.
+- **Nomi**: "Sample paper" e "  sample PAPER " rifiutati con 409 e messaggio; nome nuovo 200;
+  rename su nome altrui 409; rename a sé stesso 200; due zip con lo stesso nome → "(2)" e "(3)".
+  I progetti di prova cancellati, la libreria è tornata al solo "Sample paper".
+- **Smoke esteso** (era 16, ora **22**): tre check sulla build cache (404 prima, PDF servito dopo,
+  flag `fresh`) e tre sull'unicità dei nomi. Erano proprio le due aree senza copertura.
+- ⚠️ Residui dichiarati: il **Sample paper è tornato intatto al carattere** (la riga di prova
+  aggiunta e rimossa), ma `updatedAt` è avanzato e restano 1-2 versioni auto in history (scadono
+  con la retention). Le righe di prova di Tommy (`when i was a chidl`, `ciaooo seee godeeee`) sono
+  rimaste **come le ha lasciate**.
+- Inciampo del tool browser, di nuovo: le coordinate manuali sono nello **spazio dell'immagine**
+  (1600×900), non in CSS px (1280×720) — tre click a vuoto sull'avatar prima di ricordarsene. E un
+  tab **in secondo piano non riceve i tasti**: per piazzare un cursore lì è servita la Selection API.
+
+**Rimandato di proposito**: nessuna GC per `build.pdf` (è **uno per progetto**, sovrascritto ogni
+volta — non cresce); il salto non "segue" il collega mentre si muove (è un salto, non un follow-mode).
+
+⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+
+---
+
 ## 2026-07-29 — VPS ALUM riportato su `main`, redeploy, e chiusura dell'advisory adm-zip ✅
 
 Sessione operativa sul server (`/opt/alum/alumere`), non di sviluppo.
