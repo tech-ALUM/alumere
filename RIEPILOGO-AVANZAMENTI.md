@@ -7,6 +7,128 @@
 
 ---
 
+## 2026-08-05 (ter) — Giro 12: selezione multipla e azioni in massa, alla Overleaf ✅ (check di Tommy OK)
+
+**L'ultimo punto rimasto in lista dal 18 luglio.** Il cestino era caduto stamattina; questo era l'altro,
+e si porta dietro quello che il giro 11 aveva dichiarato mancante: «cestinare venti progetti sono venti
+click». Ora sono due. Come per i giri 9 e 10, il modello è preso dai **file veri di Overleaf**
+(`overleaf/overleaf`, `services/web/frontend/js/features/project-list/components/table/`) invece che a
+occhio — e le loro colonne sono già le nostre: checkbox, Title, Owner, Last modified, Actions.
+
+**Le due decisioni di Tommy**, prese prima di scrivere una riga: il **download in massa fa uno .zip per
+progetto**, uno dopo l'altro (l'alternativa era un endpoint nuovo che li impacchetta in un archivio solo,
+come fa Overleaf — costava mezzo giro in più e il prezzo di questa scelta è il permesso che il browser
+chiede al secondo file); e nel menu dei tag si resta **fedeli a Overleaf: spunta o niente**, senza il
+trattino per il caso misto.
+
+**① La colonna delle checkbox**, prima di Title, col «seleziona tutto» in testata e il suo stato
+indeterminato. Sono `<input type="checkbox">` nativi di proposito: `accent-color` li dipinge del blu
+dell'app, `color-scheme` (già su `:root` per entrambi i temi) li rende leggibili al buio, e tastiera +
+stato indeterminato arrivano gratis — un div fatto a mano avrebbe dovuto tutti e tre. La riga selezionata
+prende la **barretta d'accento a sinistra**: l'hover già tinge la riga, serviva un segno che resta quando
+il mouse se ne va.
+- **Il click sulla checkbox non apre il progetto**, e a mangiarselo è **tutta la cella**, non solo la
+  casella: se no i pochi pixel di padding intorno navigavano via lo stesso.
+- Anche `Invio` sulla riga ora vale **solo se il fuoco è sulla riga**. Prima l'evento saliva da qualunque
+  controllo dentro; con una checkbox lì dentro sarebbe diventato un modo per uscire dalla pagina per sbaglio.
+
+**② La barra prende il posto della ricerca** quando c'è una selezione — Overleaf fa lo stesso, e i due
+non si contendono l'angolo. Le azioni cambiano con la vista: `Tags ▾ · Download · Archive · Trash` in
+lista, `Tags ▾ · Download · Restore · Trash` in archivio, solo `Restore · Delete permanently` nel cestino.
+- **Una deviazione da Overleaf, voluta**: loro nascondono i tag in archivio. Da noi il 🏷 di riga lì c'è
+  già dal giro 7, e una barra che contraddice la riga sotto è un pezzo rotto.
+- **Il download in massa non c'è nel cestino**: il giro 11 aveva deciso che una riga cestinata offre solo
+  Restore e Delete permanently, e non ha senso smentirlo qui.
+- I bottoni stanno **tutti nel markup** e si nascondono per vista, non si rigenerano: al popover dei tag
+  serve un elemento d'ancoraggio che non gli sparisca sotto.
+
+**③ Tag in massa, con la regola di Overleaf.** La spunta vuol dire «ce l'hanno **tutti**»; il click la
+toglie a tutti quando l'hanno tutti, altrimenti **lo aggiunge solo ai mancanti** — che è l'unica cosa che
+«add to tag» possa significare per una selezione mista. Il menu è lo stesso del 🏷 di riga, generalizzato
+a una **lista** di progetti (una sola voce per il caso singolo).
+
+**④ Cestina, archivia, ripristina, elimina: cicli sugli endpoint per-progetto.** Nessuna superficie nuova
+sul server — per questo `smoke.sh` resta a 31 check, senza aggiunte: non c'era niente di nuovo da
+sorvegliare lì. Sequenziali di proposito: scritture parallele sugli stessi `meta.json` non comprano nulla,
+e una raffica rende impossibile raccontare onestamente un fallimento parziale («3 di 7 non riuscite» vuole
+il conteggio). Il contatore è a schermo mentre girano (`Moving to trash 3/5…`).
+- Conferma su **cestina** ed **elimina definitivamente**, col dialogo del giro 11 (fuoco su Cancel, corallo
+  solo sull'irreversibile). Archivia e ripristina no: sono reversibili, esattamente come le azioni di riga.
+- Dopo un'azione la selezione **si azzera**: quei progetti hanno lasciato la vista, e una spunta rimasta
+  lì li avrebbe fatti resuscitare selezionati appena entravi nella vista dove sono andati. Taggare e
+  scaricare invece la tengono — non hanno spostato niente.
+- Il ripristino in massa **dice il rename**, come quello singolo: `5 projects restored ✓ (1 renamed)`. Un
+  progetto che torna zitto come «Thesis (2)» sembra un bug, non un nome occupato nel frattempo.
+
+**⑤ La ricerca restringe, non distrugge.** Il `Set` tiene gli id, ma tutto agisce su quelli che **vedi**:
+filtri e la barra parla di meno, pulisci il filtro e tornano. Cambiare vista invece azzera — quello è un
+lavoro diverso.
+
+**Due cose sistemate per strada, tutte e due colpa mia**
+- I messaggi nuovi sono frasi («5 projects moved to trash ✓») e a 375px la pastiglia di stato andava a
+  **4 righe dentro una topbar da 50px**. Ora è a riga singola con ellissi, e il testo pieno vive nel
+  tooltip (`setStatus` scrive anche `title`).
+- La colonna delle checkbox aveva schiacciato il **nome del progetto a 0px** sotto i 760px. Ho nascosto lì
+  il 🏷 di riga: si rivela solo all'hover, che su uno schermo stretto non esiste, e costava 32px per un
+  bottone irraggiungibile — il `Tags ▾` della barra fa lo stesso lavoro.
+
+**Coda, dopo il check di Tommy**
+- **La pastiglia di stato non scadeva mai.** Il difetto era più largo di com'era stato notato: *nessun*
+  messaggio se ne andava, restava finché non ricaricavi o non ripartiva un `load()`. Lo svuota-cestino lo
+  rendeva evidente perché è l'ultima cosa che fai in quella vista, e poi te ne vai. Ora un **successo dura
+  4 secondi** e sparisce da solo; un **errore no**, quello devi poterlo leggere con calma.
+- **Via il badge «draft»** dalla home, `<span>` e regola CSS (nell'editor non c'era già più).
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh` **31/31**)
+- **Il caso misto dei tag**, che è il cuore del giro: `zz-blue` su A e B, non su C. Un click → finisce
+  **solo su C**, A e B saltati (conteggi 2→3 e «Senza tag» 4→3, popover che resta aperto e si riposiziona);
+  secondo click con la spunta piena → tolto a tutti e tre, confermato via API (`tags: []` su tutti).
+- **Giro completo su 5 progetti usa-e-getta**: `5 projects archived ✓` → dialogo «Move 5 projects to
+  trash?» → `5 projects restored ✓ (1 renamed)` (avevo occupato «zz-bulk-A» nel frattempo → tornato come
+  **`zz-bulk-A (2)`**) → `5 projects deleted permanently ✓`, con le **cartelle sparite da disco**
+  (controllate dentro il container).
+- **La regola del giro 11 regge anche in massa**: i cestinati che erano archiviati tornano **nell'archivio**,
+  non in lista — verificato che `archived` sopravviva al viaggio su tutti e cinque.
+- **Le viste**: archivio `[Tags, Download, Restore, Trash]`, cestino `[Restore, Delete permanently]` con la
+  colonna «Deleted». Dialogo dell'eliminazione: fuoco su **Cancel** (letto `activeElement`), bottone corallo
+  «Delete 5 projects», la frase irreversibile al suo posto.
+- **La ricerca non distrugge**: 2 selezionati → filtro → «1 selected» → filtro pulito → «2 selected».
+  Nessuna riga visibile → «0 selected», barra via, ricerca che torna col testo intatto.
+- **Il click sulla checkbox non apre**: URL invariato.
+- **375px**: la barra va a capo su una riga sua, quattro bottoni leggibili; pastiglia da 68px a **25px**,
+  una riga sola; nome del progetto da **0 a 11px** (la linea di partenza era 13).
+- **La coda**: `Trash emptied ✓` ancora lì a 2s, **sparita a 4,6s**, anche tornando su «All projects».
+  L'errore invece resta: un 409 vero («Move the project to the trash first.») ancora a schermo **dopo 5s**,
+  e un successo subito dopo si cancella comunque — il timer non resta incastrato.
+- **Il download in massa l'ha verificato Tommy nel browser vero**: qui le due richieste tornano 200 e il
+  contatore gira (`Downloading 1/2…` → `2 zips downloaded ✓`), ma nel browser incorporato **i file non
+  atterrano su disco**, quindi il prompt «consentire più download?» non era osservabile da qui.
+- Prove tutte su progetti **usa-e-getta**, cancellati a fine giro (libreria di nuovo col solo «Sample
+  paper», `meta.json` intatto, `updatedAt` fermo al 2 agosto, zero tag). Tema mai toccato.
+- **Nota di metodo**: stavo per attribuire alla mia colonna un overflow orizzontale di 89px a 375px. A
+  stabilire che era preesistente è stata una misura A/B — rimettere la griglia vecchia con un `<style>`
+  temporaneo e rimisurare: **89px in entrambi i casi**. Senza quella misura avrei «aggiustato» una cosa
+  che non avevo rotto io, e non avrei visto la pastiglia, che invece era mia davvero.
+
+**Rimandato di proposito**
+- **Shift-click per selezionare un intervallo**: Overleaf non ce l'ha, e ricerca + «seleziona tutto» copre
+  già il caso dei venti progetti (filtra, spunta la testata, agisci).
+- **Difetto preesistente, non toccato**: a 375px la topbar sfora di ~85px in orizzontale ogni volta che c'è
+  un messaggio di stato — è brand + nome utente + Switch + ⚙ + pastiglia che non ci stanno. Si vede solo
+  mentre il messaggio è a schermo, e sistemarlo vuol dire ripensare la topbar stretta: è un giro suo.
+  (I giri precedenti non l'avevano visto perché `.status:empty` la fa sparire: senza messaggio, nessun
+  trabocco.)
+- **Aprire un cestinato via URL diretto** funziona ancora e l'editor non ha il cartello: resta dal giro 11,
+  da fare quando si toccherà l'editor.
+
+**La lista del 18 luglio è finita.** Restano: **sicurezza giro 2** (allowlist per-persona, ACL per-progetto)
+e **template** (Step G, da scrivere prima).
+
+⚠️ **Non è live**: `public/` soltanto, ma serve comunque il pull+rebuild sul VPS (Albi) — fermo a
+`1541753`, quindi gli mancano i giri 8, 9, 10, la coda, l'11 e questo.
+
+---
+
 ## 2026-08-05 (bis) — Giro 11: il cestino, e l'eliminazione definitiva diventa a due stadi ✅ (check di Tommy OK)
 
 Il primo dei due punti rimasti in lista dal 18 luglio (l'altro è **tag in massa**). Fino a ieri
