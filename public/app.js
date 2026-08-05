@@ -1370,11 +1370,21 @@ function parseSyncTex(text, root) {
     a.push(rec);
   };
   for (const ln of text.split("\n")) {
+    // Input records are NOT all in the header: a file \input mid-document is opened after
+    // the first page has already been shipped out, so synctex writes its record down in the
+    // content section, where it happens. Reading them only before "Content:" left every such
+    // file nameless — no tag, so the forward jump from it did nothing at all and the inverse
+    // one couldn't say which file a click belonged to. It went unnoticed because on a short
+    // document TeX opens everything before shipping page 1, and there every record is in the
+    // header. "Input:" can't collide with a content record: those all start with a single
+    // punctuation or letter code ({ } ( ) h v x k g $ [ ]), never with a capital I.
+    if (ln.startsWith("Input:")) {
+      const m = ln.match(/^Input:(\d+):(.*)$/);
+      if (m) { const p = norm(m[2]); pathOf.set(+m[1], p); if (!tagOf.has(p)) tagOf.set(p, +m[1]); }
+      continue;
+    }
     if (!inContent) {
-      if (ln.startsWith("Input:")) {
-        const m = ln.match(/^Input:(\d+):(.*)$/);
-        if (m) { const p = norm(m[2]); pathOf.set(+m[1], p); if (!tagOf.has(p)) tagOf.set(p, +m[1]); }
-      } else if (ln.startsWith("Unit:")) unit = Number(ln.slice(5)) || 1;
+      if (ln.startsWith("Unit:")) unit = Number(ln.slice(5)) || 1;
       else if (ln.startsWith("X Offset:")) offX = (Number(ln.slice(9)) || 0) / SP_PER_BP;
       else if (ln.startsWith("Y Offset:")) offY = (Number(ln.slice(9)) || 0) / SP_PER_BP;
       else if (ln.startsWith("Content:")) inContent = true;
