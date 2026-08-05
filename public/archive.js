@@ -2,6 +2,8 @@
 // owner / last-modified / actions), with a sidebar (views + shared tags) and a search.
 // Create projects (blank / .zip), open, delete, download sources (.zip) or a compiled PDF,
 // archive/restore, and tag them. Tags are SHARED: the whole library sees the same set.
+// Deleting is two-stage: the row action moves a project to the TRASH (undoable), and only
+// from the Trash view can it be destroyed for good. Both steps ask first — see confirmDialog.
 
 const rowsEl = document.getElementById("rows");
 const listEl = document.getElementById("list");
@@ -14,12 +16,15 @@ const sideAside = document.querySelector(".home-side");
 const sideTagsEl = document.getElementById("sideTags");
 const countAllEl = document.getElementById("countAll");
 const countArchEl = document.getElementById("countArch");
+const countTrashEl = document.getElementById("countTrash");
 const viewTitleEl = document.getElementById("viewTitle");
+const colModEl = document.getElementById("colMod");
+const emptyTrashBtn = document.getElementById("emptyTrashBtn");
 
-let PROJECTS = [];              // last loaded list, unfiltered
+let PROJECTS = [];              // last loaded list, unfiltered (trash included)
 let TAGS = [];                  // tag registry [{id,name,color}]
 let query = "";
-let view = { kind: "all" };     // { kind:'all'|'archived'|'untagged' } | { kind:'tag', id }
+let view = { kind: "all" };     // { kind:'all'|'archived'|'trash'|'untagged' } | { kind:'tag', id }
 
 // Client mirror of the server tag palette (for the swatches).
 const TAG_COLORS = ["#7eb0d5", "#bd7ebe", "#8bd450", "#ffb55a", "#fd7f6f", "#e879b9", "#5ec8c0", "#9a8cff"];
@@ -70,7 +75,13 @@ async function load() {
 }
 
 // ---------- views / filtering ----------
+// A project in the trash shows in the Trash view and NOWHERE else — not in the archive,
+// not under its tags, not in the counts. It's on its way out; it shouldn't keep colouring
+// the library it has already left.
+const live = () => PROJECTS.filter((p) => !p.deleted);
 function inView(p) {
+  if (view.kind === "trash") return !!p.deleted;
+  if (p.deleted) return false;
   switch (view.kind) {
     case "archived": return !!p.archived;
     case "untagged": return !p.archived && projTags(p).length === 0;
@@ -87,6 +98,7 @@ function currentList() {
 function titleFor() {
   switch (view.kind) {
     case "archived": return "Archived";
+    case "trash": return "Trash";
     case "untagged": return "No tag";
     case "tag": { const t = tagById(view.id); return t ? t.name : "Tag"; }
     default: return "All projects";
@@ -96,6 +108,7 @@ function emptyMsg() {
   if (query.trim()) return `No projects for «${query.trim()}».`;
   switch (view.kind) {
     case "archived": return "No archived projects.";
+    case "trash": return "The trash is empty.";
     case "untagged": return "No untagged projects.";
     case "tag": return "No projects with this tag.";
     default: return "No projects.";
@@ -106,12 +119,14 @@ function emptyMsg() {
 function render() { renderSidebar(); renderMain(); }
 
 function renderSidebar() {
-  const nAll = PROJECTS.filter((p) => !p.archived).length;
-  const nArch = PROJECTS.length - nAll;
+  const alive = live();
+  const nAll = alive.filter((p) => !p.archived).length;
+  const nArch = alive.length - nAll;
+  const nTrash = PROJECTS.length - alive.length;
   countAllEl.textContent = nAll ? String(nAll) : "";
   countArchEl.textContent = nArch ? String(nArch) : "";
-  sideAside.querySelector('.side-item[data-view="all"]').classList.toggle("active", view.kind === "all");
-  sideAside.querySelector('.side-item[data-view="archived"]').classList.toggle("active", view.kind === "archived");
+  countTrashEl.textContent = nTrash ? String(nTrash) : "";
+  sideAside.querySelectorAll(".side-nav .side-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view.kind));
 
   // Tags section: heading, then "New tag" at the TOP, then the tag list + "No tag".
   sideTagsEl.innerHTML = "";
@@ -124,7 +139,7 @@ function renderSidebar() {
   sideTagsEl.appendChild(add);
   if (TAGS.length) {
     for (const t of TAGS) {
-      const n = PROJECTS.filter((p) => !p.archived && (p.tags || []).includes(t.id)).length;
+      const n = alive.filter((p) => !p.archived && (p.tags || []).includes(t.id)).length;
       const item = document.createElement("button");
       item.className = "side-item tag-item" + (view.kind === "tag" && view.id === t.id ? " active" : "");
       item.dataset.view = "tag"; item.dataset.tag = t.id;
@@ -133,7 +148,7 @@ function renderSidebar() {
       item.querySelector(".ti-name").textContent = t.name;
       sideTagsEl.appendChild(item);
     }
-    const nUn = PROJECTS.filter((p) => !p.archived && projTags(p).length === 0).length;
+    const nUn = alive.filter((p) => !p.archived && projTags(p).length === 0).length;
     const un = document.createElement("button");
     un.className = "side-item" + (view.kind === "untagged" ? " active" : "");
     un.dataset.view = "untagged";
@@ -144,10 +159,15 @@ function renderSidebar() {
 
 function renderMain() {
   const list = currentList();
-  const trulyEmpty = PROJECTS.length === 0;
+  // "Nothing here yet" is about the library, not the trash: with everything thrown away the
+  // pitch to create a project is still the right screen — but the Trash view keeps its table.
+  const trulyEmpty = live().length === 0 && view.kind !== "trash";
   emptyEl.classList.toggle("hidden", !trulyEmpty);
   listEl.classList.toggle("hidden", trulyEmpty);
   viewTitleEl.textContent = titleFor();
+  // In the trash that column carries deletedAt, not updatedAt — the header has to follow it.
+  colModEl.textContent = view.kind === "trash" ? "Deleted" : "Last modified";
+  emptyTrashBtn.hidden = !(view.kind === "trash" && PROJECTS.some((p) => p.deleted));
   rowsEl.innerHTML = "";
   if (!trulyEmpty) {
     if (list.length === 0) {
@@ -161,15 +181,19 @@ function renderMain() {
   footEl.textContent = trulyEmpty ? "" : `${list.length} project${list.length === 1 ? "" : "s"}`;
 }
 
-function fillChips(container, p) {
+// In the trash the chips are read-only: they say what the project was filed under, but
+// editing the tags of something you've thrown away is busywork (and it wouldn't show up
+// in any tag view anyway).
+function fillChips(container, p, editable = true) {
   container.innerHTML = "";
   for (const t of projTags(p)) {
     const chip = document.createElement("span");
     chip.className = "tag-chip";
     chip.style.setProperty("--tc", t.color);
-    chip.innerHTML = `<span class="tag-dot"></span><span class="tc-name"></span><button class="tag-x" aria-label="Remove tag" title="Remove tag">×</button>`;
+    chip.innerHTML = `<span class="tag-dot"></span><span class="tc-name"></span>` +
+      (editable ? `<button class="tag-x" aria-label="Remove tag" title="Remove tag">×</button>` : "");
     chip.querySelector(".tc-name").textContent = t.name;
-    chip.querySelector(".tag-x").addEventListener("click", async (e) => {
+    if (editable) chip.querySelector(".tag-x").addEventListener("click", async (e) => {
       e.stopPropagation();
       try { await setProjectTags(p, (p.tags || []).filter((x) => x !== t.id)); render(); }
       catch { setStatus("err", "Operation failed"); }
@@ -179,46 +203,58 @@ function fillChips(container, p) {
 }
 
 function rowFor(p) {
-  const archived = !!p.archived;
+  const archived = !!p.archived, trashed = !!p.deleted;
   const row = document.createElement("div");
-  row.className = "proj-row";
-  row.tabIndex = 0;
-  row.setAttribute("role", "button");
+  // A trashed row isn't a way into the project: it opens nothing on click, so nobody edits
+  // a project that's on death row (and then loses the work when the trash is emptied).
+  // Restore first — it's one click, and it puts the project back where it came from.
+  row.className = "proj-row" + (trashed ? " trashed" : "");
+  if (!trashed) { row.tabIndex = 0; row.setAttribute("role", "button"); }
   row.dataset.id = p.id;
   row.innerHTML = `
     <div class="c-title">
       <span class="proj-row-icon">∑</span>
       <span class="proj-row-name"></span>
       <span class="tag-chips"></span>
-      <button class="tag-add" aria-label="Add tag" title="Tag">${ICONS.tag}</button>
+      ${trashed ? "" : `<button class="tag-add" aria-label="Add tag" title="Tag">${ICONS.tag}</button>`}
     </div>
     <div class="c-owner"></div>
     <div class="c-mod"><span class="mod-when"></span><span class="mod-by"></span></div>
-    <div class="c-actions">
+    <div class="c-actions">${trashed ? `
+      <button class="row-act row-restore" data-tip="Restore" aria-label="Restore">${ICONS.restore}</button>
+      <button class="row-act row-del" data-tip="Delete permanently" aria-label="Delete permanently">${ICONS.trash}</button>` : `
       <button class="row-act row-ren" data-tip="Rename" aria-label="Rename">${ICONS.edit}</button>
       <button class="row-act row-zip" data-tip="Download sources (.zip)" aria-label="Download .zip">${ICONS.download}</button>
       <button class="row-act row-pdf" data-tip="Download PDF" aria-label="Download PDF"><span class="pdf-badge">PDF</span></button>
       <button class="row-act row-arch" data-tip="${archived ? "Restore" : "Archive"}" aria-label="${archived ? "Restore" : "Archive"}">${archived ? ICONS.restore : ICONS.archive}</button>
-      <button class="row-act row-del" data-tip="Delete" aria-label="Delete">${ICONS.trash}</button>
+      <button class="row-act row-del" data-tip="Move to trash" aria-label="Move to trash">${ICONS.trash}</button>`}
     </div>`;
   row.querySelector(".proj-row-name").textContent = p.name || "Untitled";
   row.querySelector(".c-owner").textContent = (p.createdBy && p.createdBy.name) || "—";
+  // In the trash the useful date is when it was thrown away, not when it was last edited
+  // (the column header switches to "Deleted" to match, so the cell doesn't repeat it).
   const when = row.querySelector(".mod-when");
-  when.textContent = relTime(p.updatedAt);
-  when.title = fmtAbs(p.updatedAt);
-  const by = (p.updatedBy && p.updatedBy.name) || "";
+  const stamp = trashed ? p.deletedAt : p.updatedAt;
+  when.textContent = relTime(stamp);
+  when.title = fmtAbs(stamp);
+  const by = ((trashed ? p.deletedBy : p.updatedBy) || {}).name || "";
   row.querySelector(".mod-by").textContent = by ? ` · ${by}` : "";
-  fillChips(row.querySelector(".tag-chips"), p);
+  fillChips(row.querySelector(".tag-chips"), p, !trashed);
 
+  const stop = (sel, fn) => { const el = row.querySelector(sel); el.addEventListener("click", (e) => { e.stopPropagation(); fn(el); }); };
+  if (trashed) {
+    stop(".row-restore", () => restoreFromTrash(p));
+    stop(".row-del", () => deleteForever(p));
+    return row;
+  }
   row.addEventListener("click", () => openProject(p.id));
   row.addEventListener("keydown", (e) => { if (e.key === "Enter") openProject(p.id); });
-  const stop = (sel, fn) => { const el = row.querySelector(sel); el.addEventListener("click", (e) => { e.stopPropagation(); fn(el); }); };
   stop(".tag-add", (el) => openTagMenu(p, el));
   stop(".row-ren", () => renameProject(p));
   stop(".row-zip", () => downloadBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`, "Preparing the zip…"));
   stop(".row-pdf", () => downloadBlob(`/api/projects/${enc(p.id)}/pdf`, `${safeFile(p.name)}.pdf`, "Compiling the PDF…"));
   stop(".row-arch", () => toggleArchive(p, !archived));
-  stop(".row-del", () => removeProject(p));
+  stop(".row-del", () => moveToTrash(p));
   return row;
 }
 function refreshRowChips(p) {
@@ -369,14 +405,65 @@ async function createTag(name, color) {
 }
 async function deleteTag(id) {
   const t = tagById(id);
-  const n = PROJECTS.filter((p) => (p.tags || []).includes(id)).length;
-  if (!confirm(`Delete the tag «${t ? t.name : ""}»?` + (n ? ` It will be removed from ${n} project${n === 1 ? "" : "s"}.` : ""))) return;
+  const n = PROJECTS.filter((p) => (p.tags || []).includes(id)).length;   // trash included: the cascade hits those too
+  const ok = await confirmDialog({
+    title: "Delete tag?",
+    body: `The tag "${t ? t.name : ""}" will be deleted for everyone` +
+      (n ? `, and removed from ${n} project${n === 1 ? "" : "s"}.` : ".") + " The projects themselves aren't touched.",
+    confirmLabel: "Delete tag",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await fetch("/api/tags/" + enc(id), { method: "DELETE" });
     if (view.kind === "tag" && view.id === id) view = { kind: "all" };
     await load();
   } catch { setStatus("err", "Tag delete failed"); }
 }
+
+// ---------- confirm dialog ----------
+// Replaces window.confirm() for the actions that take something away. Native confirm can't
+// be styled, can't say which button is the dangerous one, and prints the origin above the
+// question ("localhost:3000 says") — bad company for "this is irreversible".
+// Focus lands on Cancel on purpose: a stray Enter or Space must never destroy a project.
+// Resolves true only if the user really pressed the action button.
+function confirmDialog({ title, body, confirmLabel, danger = false }) {
+  if (popoverClose) popoverClose();
+  return new Promise((resolve) => {
+    const ov = document.createElement("div");
+    ov.className = "confirm-overlay";
+    ov.innerHTML = `
+      <div class="confirm-card" role="alertdialog" aria-modal="true">
+        <h2 class="confirm-title"></h2>
+        <p class="confirm-body"></p>
+        <div class="confirm-actions">
+          <button type="button" class="btn cf-cancel">Cancel</button>
+          <button type="button" class="btn ${danger ? "danger" : "primary"} cf-ok"></button>
+        </div>
+      </div>`;
+    ov.querySelector(".confirm-title").textContent = title;
+    ov.querySelector(".confirm-body").textContent = body;
+    ov.querySelector(".cf-ok").textContent = confirmLabel;
+    document.body.appendChild(ov);
+    const btns = [...ov.querySelectorAll("button")];
+    const done = (val) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(val); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); done(false); }
+      else if (e.key === "Tab") {                                   // keep Tab inside the dialog
+        e.preventDefault();
+        const i = btns.indexOf(document.activeElement);
+        const n = btns.length;
+        btns[e.shiftKey ? (i <= 0 ? n - 1 : i - 1) : (i < 0 || i === n - 1 ? 0 : i + 1)].focus();
+      }
+    };
+    ov.addEventListener("mousedown", (e) => { if (e.target === ov) done(false); });
+    ov.querySelector(".cf-cancel").addEventListener("click", () => done(false));
+    ov.querySelector(".cf-ok").addEventListener("click", () => done(true));
+    document.addEventListener("keydown", onKey, true);
+    ov.querySelector(".cf-cancel").focus();
+  });
+}
+const IRREVERSIBLE = "This action is irreversible. Are you sure you want to continue?";
 
 // ---------- row actions ----------
 async function downloadBlob(url, filename, busyMsg) {
@@ -411,10 +498,77 @@ async function toggleArchive(p, archived) {
   } catch { setStatus("err", "Operation failed"); }
 }
 
-async function removeProject(p) {
-  if (!confirm(`Delete "${p.name}"? This can't be undone, for anyone.`)) return;
-  try { await fetch(`/api/projects/${enc(p.id)}`, { method: "DELETE" }); load(); }
-  catch { setStatus("err", "Delete failed"); }
+// ---------- trash: move / restore / destroy ----------
+async function setTrashed(p, deleted, busyMsg) {
+  setStatus("busy", busyMsg);
+  const res = await fetch(`/api/projects/${enc(p.id)}/trash`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deleted }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Operation failed");
+  return data;
+}
+
+async function moveToTrash(p) {
+  const ok = await confirmDialog({
+    title: "Move to trash?",
+    body: `"${p.name}" will be moved to the trash, for everyone. You can restore it from there — nothing is deleted yet.`,
+    confirmLabel: "Move to trash",
+  });
+  if (!ok) return;
+  try { await setTrashed(p, true, "Moving to trash…"); await load(); setStatus("ok", "Moved to trash ✓"); }
+  catch (e) { setStatus("err", e.message || "Operation failed"); }
+}
+
+async function restoreFromTrash(p) {
+  try {
+    const d = await setTrashed(p, false, "Restoring…");
+    await load();
+    // The server suffixes the name if it was taken while the project sat in the trash — say
+    // so, or the project quietly comes back as "Thesis (2)" and it looks like a bug.
+    setStatus("ok", d.name && d.name !== p.name ? `Restored as "${d.name}" ✓` : "Restored ✓");
+  } catch (e) { setStatus("err", e.message || "Operation failed"); }
+}
+
+async function deleteForever(p) {
+  const ok = await confirmDialog({
+    title: "Delete permanently?",
+    body: `"${p.name}" will be destroyed for everyone, with all its files, history and comments. ${IRREVERSIBLE}`,
+    confirmLabel: "Delete permanently",
+    danger: true,
+  });
+  if (!ok) return;
+  setStatus("busy", "Deleting…");
+  try {
+    const res = await fetch(`/api/projects/${enc(p.id)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({ ok: res.ok }));
+    if (!data.ok) return setStatus("err", data.error || "Delete failed");
+    await load();
+    setStatus("ok", "Deleted permanently ✓");
+  } catch { setStatus("err", "Delete failed"); }
+}
+
+async function emptyTrash() {
+  const doomed = PROJECTS.filter((p) => p.deleted);
+  if (!doomed.length) return;
+  const n = doomed.length;
+  const ok = await confirmDialog({
+    title: "Empty the trash?",
+    body: `${n} project${n === 1 ? "" : "s"} will be destroyed for everyone, with all their files, history and comments. ${IRREVERSIBLE}`,
+    confirmLabel: `Delete ${n} project${n === 1 ? "" : "s"}`,
+    danger: true,
+  });
+  if (!ok) return;
+  setStatus("busy", "Emptying the trash…");
+  let failed = 0;
+  for (const p of doomed) {
+    try {
+      const res = await fetch(`/api/projects/${enc(p.id)}`, { method: "DELETE" });
+      if (!res.ok) failed++;
+    } catch { failed++; }
+  }
+  await load();
+  setStatus(failed ? "err" : "ok", failed ? `${failed} of ${n} could not be deleted` : "Trash emptied ✓");
 }
 
 async function renameProject(p) {
@@ -498,6 +652,7 @@ sideAside.addEventListener("click", (e) => {
 });
 async function onNewTag(anchor) { const t = await openCreateTag(anchor); if (t) await load(); }
 searchEl.addEventListener("input", () => { query = searchEl.value; renderMain(); });
+emptyTrashBtn.addEventListener("click", emptyTrash);
 
 // Wait until the user is identified (auth.js) before loading the library.
 (window.Alumere ? window.Alumere.ready : Promise.resolve()).then(load);

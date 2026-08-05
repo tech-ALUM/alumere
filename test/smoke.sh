@@ -133,6 +133,32 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/proje
   -H 'Content-Type: application/json' -d '{"name":"Dup Smoke"}')
 [ "$code" = 200 ] && ok "rinomina allo stesso nome consentita (non è un duplicato di sé)" || ko "rinomina a se stesso: atteso 200, avuto $code"
 
+echo "— cestino (soft delete, poi eliminazione definitiva)"
+# La cancellazione è a due stadi: il DELETE distrugge davvero, e accetta solo progetti
+# già nel cestino. È la garanzia che nessun singolo click possa bruciare un progetto.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X DELETE "$BASE/api/projects/$dupid")
+[ "$code" = 409 ] && ok "delete definitivo rifiutato su progetto vivo (409)" || ko "delete su progetto vivo: atteso 409, avuto $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects/$dupid/trash" \
+  -H 'Content-Type: application/json' -d '{"deleted":true}')
+[ "$code" = 200 ] && ok "progetto spostato nel cestino" || ko "cestino: atteso 200, avuto $code"
+flag=$(curl -s -b "$JAR" "$BASE/api/projects" | json "[bool(p.get('deleted')) and bool(p.get('deletedAt')) for p in d['projects'] if p['id']=='$dupid'][0]")
+[ "$flag" = "True" ] && ok "flag deleted + deletedAt sul progetto cestinato" || ko "meta del cestino incompleto (deleted/deletedAt)"
+# Un progetto invisibile non deve tenere in ostaggio il suo nome…
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects" \
+  -H 'Content-Type: application/json' -d '{"name":"Dup Smoke"}')
+[ "$code" = 200 ] && ok "il cestino non riserva il nome (creazione omonima consentita)" || ko "nome del cestinato ancora riservato: avuto $code"
+# …e infatti al ripristino il nome viene suffissato invece di far fallire il restore.
+rname=$(curl -s -b "$JAR" -X POST "$BASE/api/projects/$dupid/trash" \
+  -H 'Content-Type: application/json' -d '{"deleted":false}' | json "d.get('name')")
+[ "$rname" = "Dup Smoke (2)" ] && ok "ripristino con nome occupato → suffisso «$rname»" || ko "ripristino: atteso «Dup Smoke (2)», avuto «${rname:-nulla}»"
+curl -s -o /dev/null -b "$JAR" -X POST "$BASE/api/projects/$dupid/trash" \
+  -H 'Content-Type: application/json' -d '{"deleted":true}'
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X DELETE "$BASE/api/projects/$dupid")
+[ "$code" = 200 ] && ok "delete definitivo consentito dal cestino" || ko "delete dal cestino: atteso 200, avuto $code"
+gone=$(curl -s -b "$JAR" "$BASE/api/projects" | json "sum(1 for p in d['projects'] if p['id']=='$dupid')")
+[ "$gone" = 0 ] && ok "progetto sparito dalla lista dopo il delete definitivo" || ko "il progetto eliminato è ancora in lista"
+docker exec $NAME test ! -d "/data/projects/$dupid" && ok "cartella rimossa da disco" || ko "la cartella del progetto è ancora su disco"
+
 echo "— gc (passata post-boot sul progetto fixture)"
 for _ in $(seq 1 30); do docker exec $NAME test ! -f "$OBJ/$ORPHAN_SHA" && break; sleep 2; done
 docker exec $NAME test ! -f "$OBJ/$ORPHAN_SHA" && ok "blob orfano rimosso" || ko "blob orfano ancora presente dopo la passata"

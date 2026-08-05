@@ -57,6 +57,10 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
           <span class="side-ic">🗄</span> Archived
           <span class="side-count" id="countArch"></span>
         </button>
+        <button class="side-item" data-view="trash">
+          <span class="side-ic">🗑</span> Trash
+          <span class="side-count" id="countTrash"></span>
+        </button>
       </nav>
       <div class="side-tags" id="sideTags"></div>
     </aside>
@@ -64,6 +68,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     <main class="home-main">
       <div class="home-main-head">
         <h1 id="viewTitle">All projects</h1>
+        <button id="emptyTrashBtn" class="btn danger" hidden>Empty trash</button>
         <div class="search">
           <span class="search-ic">🔎</span>
           <input id="search" type="search" placeholder="Search project…" autocomplete="off" spellcheck="false" />
@@ -74,7 +79,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
         <div class="proj-list-head">
           <span class="c-title">Title</span>
           <span class="c-owner">Owner</span>
-          <span class="c-mod">Last modified</span>
+          <span class="c-mod" id="colMod">Last modified</span>
           <span class="c-actions">Actions</span>
         </div>
         <div id="rows"></div>

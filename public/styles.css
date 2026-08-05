@@ -724,6 +724,42 @@ body.dragging .pdf-scroll { pointer-events: none; }
   .proj-row .row-zip, .proj-row .row-pdf { display: none; }
 }
 
+/* ---------- trash (soft delete) ---------- */
+/* "Empty trash" sits next to the view title; the auto margin is what keeps the search box
+   pinned right, since .home-main-head spreads its children with space-between. */
+#emptyTrashBtn { margin-right: auto; }
+/* A trashed row opens nothing — the pointer shouldn't promise otherwise. The hover tint
+   stays: it's what lifts Restore / Delete permanently out of the row. */
+.proj-row.trashed { cursor: default; }
+.proj-row.trashed .proj-row-icon { filter: grayscale(1); opacity: .5; }
+
+.btn.danger { background: var(--coral); border-color: var(--coral); color: #5a1e15; font-weight: 600; }
+.btn.danger:hover { background: #f9695a; border-color: #f9695a; }
+
+/* Confirm dialog — the styled stand-in for window.confirm() (see confirmDialog in
+   archive.js). Same overlay recipe as the sign-in card, one z-index above it. */
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: grid; place-items: center; padding: 20px;
+  background: rgba(20, 30, 41, .55); backdrop-filter: blur(3px);
+}
+.confirm-card {
+  width: 100%; max-width: 420px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 22px 24px 18px; box-shadow: 0 24px 60px rgba(16, 48, 73, .28);
+}
+.confirm-title { margin: 0 0 8px; font-size: 17px; color: var(--ink); }
+.confirm-body { margin: 0 0 18px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+/* .btn's base palette is made for the dark topbar; on a panel it needs the panel colours. */
+.confirm-actions .btn { border-color: var(--line); background: var(--panel); color: var(--ink); }
+.confirm-actions .btn:hover { background: var(--accent-soft); }
+.confirm-actions .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.confirm-actions .btn.primary:hover { background: #6aa6d0; border-color: #6aa6d0; }
+.confirm-actions .btn.danger { background: var(--coral); border-color: var(--coral); color: #5a1e15; }
+.confirm-actions .btn.danger:hover { background: #f9695a; border-color: #f9695a; }
+.confirm-actions .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---------- tags: sidebar section, row chips, popovers ---------- */
 .side-tags { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 .side-tags-head { font-size: 11px; color: var(--muted); padding: 10px 10px 4px; }

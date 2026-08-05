@@ -100,7 +100,9 @@ async function writeMeta(id, meta) {
 
 // Two projects can't share a display name (the library lists them flat — identical labels
 // would make "which one is it?" a guessing game). Case-insensitive on purpose: "Thesis" and
-// "thesis" would be just as confusing as an exact clone.
+// "thesis" would be just as confusing as an exact clone. Projects in the trash are skipped:
+// they're invisible in every view but one, so letting them reserve a name would reject a new
+// project by pointing at something nobody can see. Restore re-checks and suffixes instead.
 async function findProjectByName(name, exceptId = null) {
   const want = String(name || "").trim().toLowerCase();
   if (!want) return null;
@@ -109,7 +111,7 @@ async function findProjectByName(name, exceptId = null) {
     for (const d of dirs) {
       if (d.name === exceptId) continue;
       const meta = await readMeta(d.name);
-      if (meta && String(meta.name || "").trim().toLowerCase() === want) return meta;
+      if (meta && !meta.deleted && String(meta.name || "").trim().toLowerCase() === want) return meta;
     }
   } catch {}
   return null;
@@ -716,9 +718,16 @@ app.post("/api/projects/:id/rename", requireUser, async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// PERMANENT delete: the folder and everything under it (files, history, comments, chat,
+// the cached build). Reachable only from the trash — a project has to be soft-deleted
+// first, so destroying one is always a second, deliberate step and never a single click.
+// Enforced here and not just in the UI: this is the one call in the API that can't be undone.
+// A folder with no meta.json is already debris, so cleaning it up stays idempotent.
 app.delete("/api/projects/:id", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (meta && !meta.deleted) return res.status(409).json({ ok: false, error: "Move the project to the trash first." });
   try { await rm(projectDir(id), { recursive: true, force: true }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -915,6 +924,38 @@ app.post("/api/projects/:id/archive", requireUser, async (req, res) => {
     meta.archived = !!(req.body || {}).archived;
     await writeMeta(id, meta);
     res.json({ ok: true, archived: meta.archived });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Trash / restore — a soft delete, same posture as archive: a shared flag on meta, nothing
+// on disk moves, updatedAt/By stay put (throwing something away isn't editing it). The point
+// is that DELETE (the permanent one) can only touch a project that is already in here.
+// `archived` is left alone on purpose: a project that was archived when it was trashed goes
+// back to the archive when restored, not to the main list.
+app.post("/api/projects/:id/trash", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  const deleted = !!(req.body || {}).deleted;
+  try {
+    if (deleted) {
+      meta.deleted = true;
+      meta.deletedAt = new Date().toISOString();
+      meta.deletedBy = briefUser(req.user);
+    } else {
+      // On the way back the old name may be taken: the trash doesn't reserve names
+      // (findProjectByName skips it), so someone could have created "Thesis" meanwhile.
+      // Suffix like the zip upload does — a restore that fails over a label would leave
+      // the project stuck in the trash with no way out but deleting it.
+      const base = String(meta.name || "").trim() || "Restored project";
+      let name = base;
+      for (let n = 2; await findProjectByName(name, id); n++) name = `${base} (${n})`;
+      meta.name = name;
+      delete meta.deleted; delete meta.deletedAt; delete meta.deletedBy;
+    }
+    await writeMeta(id, meta);
+    res.json({ ok: true, deleted, name: meta.name });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
