@@ -7,6 +7,64 @@
 
 ---
 
+## 2026-08-05 — Coda del giro 10: il doppio render e il badge che non tornava dalla cache ✅ (check di Tommy OK)
+
+I due residui dichiarati a fine giro 10, chiusi. Il giro 10 nel frattempo è stato **committato e
+pushato** (`626b275` + `34968af`) dopo il check di Tommy.
+
+**① Il PDF non si renderizza più due volte all'apertura** (bug pre-esistente dal giro 3). Un
+`ResizeObserver` consegna **una callback appena inizia a osservare**, e quella arrivava mentre il
+primo render era ancora in corso: `rendering` era true, la chiamata alzava `pendingRender` e il
+`do/while` di `renderPdf` ridisegnava tutte le pagine **alla stessa identica scala**. Ora la
+callback ridisegna solo se i pixel cambierebbero davvero — `fitScale` diversa da prima **oppure**
+canvas non ancora alla `zoom` corrente. Due casi in più che smettono di sprecare lavoro, gratis:
+quando cambia **solo l'altezza** del pannello (il fit dipende solo dalla larghezza) e quando il
+pannello è **collassato** (a larghezza 0 `computeFitScale` tiene il fit vecchio, quindi saltare è
+corretto).
+
+**② Il badge del log si ripopola dalla cache.** Il server tiene anche **`build.log`** accanto a
+`build.pdf`/`build.synctex.gz`/`build.json` e lo restituisce da `GET /api/projects/:id/build`; il
+client, se il campo c'è, ripopola log e badge **prima ancora** di disegnare il PDF (`renderIssues`
+è sincrono e sta prima di `loadPdf`). Tetto di **512KB** sul file: un log vero è decine di KB, solo
+uno impazzito diventa grosso, e ogni apertura di quel progetto se lo porterebbe dietro — se sfora si
+tiene la **testa**, dov'è la prima cosa andata storta.
+- **Retrocompatibilità**: le build messe in cache prima di oggi non hanno il log → il campo torna
+  `null` e il client **non tocca** il badge. "Non sappiamo il log di quella build" non è la stessa
+  cosa di "quella build era pulita".
+- La cache è per definizione l'ultima build **riuscita**, quindi da lì esce al massimo un badge
+  **ambra**: un rosso da errori non ci finisce mai, perché una build con errori non lascia un PDF
+  da rimostrare.
+
+**Verificato** (dev :3000, browser reale, console pulita, `test/smoke.sh` **23/23** — un check nuovo
+sul log servito dalla cache)
+- **Doppio render, A/B sullo stesso progetto**: comportamento pre-fix **2** rasterizzazioni
+  all'apertura, col fix **1**. Catturata anche la decisione della callback: `prevFit 0.5474 =
+  fitScale 0.5474`, `renderedZoom 1 = zoom 1` → skip. Cioè il render tagliato è esattamente quello
+  che ridisegnava l'identico.
+- **Il comportamento utile è intatto**: pannello allargato (367 → 547px) → PDF ri-adattato da **41%
+  a 63%**, nessun trabocco (`scrollWidth <= clientWidth`).
+- **Badge dalla cache**: riapertura → **ambra "3"**, tooltip "Compilation log — 3 warnings", stato
+  "Compiled ✓" **senza ricompilare**; click sull'icona → il log vero della build (9416 byte,
+  intestazione latexmk) coi suoi 3 warning nella lista, bottone acceso e tooltip "Back to the PDF".
+- **Cache stale**: il badge è a schermo prima ancora che il PDF sia disegnato, poi l'auto-compile
+  conferma lo stesso esito.
+- **Retrocompatibilità provata sul campo**: `build.log` rinominato a mano nel container → `log:
+  null`, badge nascosto, pannello log vuoto, nessun errore in console.
+- Progetto **usa-e-getta cancellato** a fine giro; il Sample paper di Tommy non è stato nemmeno
+  aperto (`updatedAt` fermo al 2 agosto).
+- **Nota di metodo — quarta incarnazione della solita trappola**, e stavolta è costata: col pannello
+  del browser nascosto il tab è `hidden`, rAF non scatta e **PDF.js resta appeso a metà
+  `page.render()`**; `rendering` resta true e **assorbe in `pendingRender` tutte le chiamate
+  successive**. Contare le rasterizzazioni in quello stato dà numeri che si contraddicono — due
+  misure hanno detto il contrario l'una dell'altra prima che capissi perché. La via d'uscita:
+  strumentare il **punto di decisione** invece dell'effetto (non dipende da PDF.js) e forzare un
+  frame con uno screenshot prima di ogni lettura.
+
+⚠️ **Non è live**: il VPS (Albi) è fermo a `1541753` — gli mancano i giri 8, 9 e 10 (già su `main`)
+e questa coda quando sarà committata.
+
+---
+
 ## 2026-08-02 (ter) — Giro 10: la barra strumenti del PDF alla Overleaf (il punto ④) ✅ (check di Tommy OK)
 
 Il punto rimandato dal giro 9, con le decisioni prese da Tommy. Come per i temi del giro 9,
