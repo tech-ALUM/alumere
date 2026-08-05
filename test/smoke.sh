@@ -115,6 +115,11 @@ nb=$(echo "$build" | json "len(d['pdf']) if d['ok'] else 0")
 [ "${nb:-0}" -gt 1000 ] && ok "ultima build servita dalla cache ($nb byte base64)" || ko "build cache vuota dopo la compile"
 fresh=$(echo "$build" | json "d.get('fresh')")
 [ "$fresh" = "True" ] && ok "build marcata fresh (nessun salvataggio dopo la compile)" || ko "build attesa fresh, avuto ${fresh:-nulla}"
+# The log rides with the cached build: without it the editor can show yesterday's PDF but
+# not its warning badge.
+nlog=$(echo "$build" | json "len(d.get('log') or '')")
+sig=$(echo "$build" | json "any(s in (d.get('log') or '') for s in ('pdfTeX','atexmk'))")
+[ "$sig" = "True" ] && ok "log della build servito dalla cache ($nlog byte)" || ko "log assente o irriconoscibile nella build in cache"
 
 echo "— nomi progetto unici"
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/projects" \

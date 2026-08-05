@@ -944,6 +944,11 @@ async function loadCachedBuild() {
     if (!r.ok) return null;                            // 404 = never compiled, fine
     const data = await r.json();
     if (!data.ok || !data.pdf || compileStarted) return null;
+    // The build's log comes back with it, so the badge and the log pane are the ones that
+    // build left behind (a build that produced a PDF can still carry warnings). Absent for
+    // builds cached before the server kept it: leave the badge as it is rather than
+    // claiming a clean build we know nothing about.
+    if (typeof data.log === "string") { renderLog(data.log); renderIssues(parseLatexLog(data.log)); }
     pdfBlob = b64ToBlob(data.pdf, "application/pdf");
     showTab("pdf");                                    // reveal the pane before we measure it
     try { await loadPdf(data.pdf); }
@@ -1220,7 +1225,20 @@ function setupZoom() {
     new ResizeObserver(() => {
       if (!pdfDoc) return;
       if (rt) clearTimeout(rt);
-      rt = setTimeout(() => { computeFitScale(); renderPdf(); }, 150);
+      rt = setTimeout(() => {
+        const prevFit = fitScale;
+        computeFitScale();
+        // Re-rasterise only if the pixels would actually differ: same fit width AND the
+        // canvases already carry the current zoom means there is nothing to redraw. This
+        // is what made every freshly opened PDF render TWICE — a ResizeObserver delivers
+        // one callback as soon as it starts observing, and that one landed while the
+        // first render was still running (rendering=true → pendingRender=true → the
+        // do/while drew every page a second time). It also spares a redraw when only the
+        // pane's height changed, or when the pane is collapsed (computeFitScale keeps the
+        // old fit at width 0, so the skip is correct there too).
+        if (fitScale === prevFit && renderedZoom === zoom) return;
+        renderPdf();
+      }, 150);
     }).observe(previewBody);
     // A pane dragged narrow sheds the view controls rather than overflowing its header.
     // Thresholds are the measured content widths: everything needs ~454px, and once the

@@ -1143,20 +1143,28 @@ app.post("/api/projects/:id/mentions", requireUser, async (req, res) => {
 
 // ---------- compile (compiles the files sent inline; stateless temp dir) ----------
 // The compile itself stays stateless, but the RESULT of the last successful one is kept
-// per project (build.pdf + build.synctex.gz + build.json next to meta.json, outside files/:
-// a build artifact is not a source — it must not enter zips, history or the Yjs doc). The
-// editor fetches it on open, so a project greets you with its last PDF instead of an empty
-// pane until the first compile of the day. Best-effort by design: a failed save must never
-// fail the compile that produced it.
+// per project (build.pdf + build.synctex.gz + build.log + build.json next to meta.json,
+// outside files/: a build artifact is not a source — it must not enter zips, history or the
+// Yjs doc). The editor fetches it on open, so a project greets you with its last PDF instead
+// of an empty pane until the first compile of the day. Best-effort by design: a failed save
+// must never fail the compile that produced it.
 const buildPdfPath = (id) => path.join(projectDir(id), "build.pdf");
 const buildSynctexPath = (id) => path.join(projectDir(id), "build.synctex.gz");
+const buildLogPath = (id) => path.join(projectDir(id), "build.log");
 const buildMetaPath = (id) => path.join(projectDir(id), "build.json");
-async function saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot, by }) {
+// A real latexmk log is tens of KB; only a runaway one gets big, and keeping megabytes of it
+// would slow down every open of that project for nothing. Keep the head — that's where the
+// first thing that went wrong is.
+const MAX_BUILD_LOG = 512 * 1024;
+async function saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot, by, log }) {
   try {
     if (!projectId || !validId(projectId) || !(await readMeta(projectId))) return;
     await writeFile(buildPdfPath(projectId), pdf);
     if (synctexBuf) await writeFile(buildSynctexPath(projectId), synctexBuf);
     else await rm(buildSynctexPath(projectId), { force: true });
+    const text = String(log || "");
+    await writeFile(buildLogPath(projectId),
+      text.length > MAX_BUILD_LOG ? text.slice(0, MAX_BUILD_LOG) + "\n[alumere] Log truncated — it was too long to keep.\n" : text, "utf8");
     await writeFile(buildMetaPath(projectId), JSON.stringify({ at: new Date().toISOString(), engine, synctexRoot, by }, null, 2), "utf8");
   } catch (e) { console.warn(`[alumere][build] couldn't save the last build of ${projectId}: ${e.message}`); }
 }
@@ -1173,10 +1181,15 @@ app.get("/api/projects/:id/build", requireUser, async (req, res) => {
     const pdf = await readFile(buildPdfPath(id));
     let synctex = null;
     try { synctex = (await readFile(buildSynctexPath(id))).toString("base64"); } catch {}
+    // The log rides along so the warning badge is back on open, exactly as the build left
+    // it. Missing for builds cached before this existed → null, and the client leaves the
+    // badge alone: "we don't know this build's log" is not the same as "it was clean".
+    let log = null;
+    try { log = await readFile(buildLogPath(id), "utf8"); } catch {}
     // `fresh` = no content save since this build (ISO strings compare lexicographically).
     // The editor uses it to skip the open-time recompile: same sources → same PDF.
     const fresh = !!(info.at && (!meta.updatedAt || info.at >= meta.updatedAt));
-    res.json({ ok: true, pdf: pdf.toString("base64"), synctex, synctexRoot: info.synctexRoot || "", at: info.at, engine: info.engine, fresh });
+    res.json({ ok: true, pdf: pdf.toString("base64"), synctex, synctexRoot: info.synctexRoot || "", log, at: info.at, engine: info.engine, fresh });
   } catch { res.status(404).json({ ok: false, error: "no build yet" }); }
 });
 
@@ -1219,7 +1232,7 @@ app.post("/api/compile", requireUser, async (req, res) => {
       const syncPath = path.join(dir, mainRel.replace(/\.tex$/i, ".synctex.gz"));
       const synctexBuf = existsSync(syncPath) ? await readFile(syncPath) : null;
       const synctex = synctexBuf ? synctexBuf.toString("base64") : null;
-      await saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot: dir, by: briefUser(req.user) });
+      await saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot: dir, by: briefUser(req.user), log });
       return res.json({ ok: true, log, pdf: pdf.toString("base64"), synctex, synctexRoot: dir });
     }
     return res.json({ ok: false, log: log || "No PDF was produced. Check the log for LaTeX errors.", code });
