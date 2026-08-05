@@ -13,7 +13,6 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     <div class="brand">
       <span class="logo">∑</span>
       <span class="name">Alum<span class="thin">ère</span></span>
-      <span class="tag">draft</span>
     </div>
     <div class="toolbar">
       <div class="menu" id="settingsMenu">
@@ -69,14 +68,29 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       <div class="home-main-head">
         <h1 id="viewTitle">All projects</h1>
         <button id="emptyTrashBtn" class="btn danger" hidden>Empty trash</button>
-        <div class="search">
+        <div class="search" id="searchBox">
           <span class="search-ic">🔎</span>
           <input id="search" type="search" placeholder="Search project…" autocomplete="off" spellcheck="false" />
+        </div>
+        <!-- Bulk actions. Takes the search box's place while a selection is up (Overleaf
+             does the same) instead of squeezing a second control into the same row. The
+             buttons are all here in the markup and only get hidden per view, so the Tags
+             popover always has the same anchor element to hang off. -->
+        <div class="bulk-bar" id="bulkBar" hidden>
+          <span class="bulk-count" id="bulkCount"></span>
+          <button class="btn bulk-act" id="bkTags" aria-haspopup="true">Tags <span class="caret">▾</span></button>
+          <button class="btn bulk-act" id="bkZip">Download</button>
+          <button class="btn bulk-act" id="bkArch">Archive</button>
+          <button class="btn bulk-act" id="bkUnarch">Restore</button>
+          <button class="btn bulk-act" id="bkTrash">Trash</button>
+          <button class="btn bulk-act" id="bkUntrash">Restore</button>
+          <button class="btn bulk-act danger" id="bkDel">Delete permanently</button>
         </div>
       </div>
 
       <div id="list" class="proj-list">
         <div class="proj-list-head">
+          <span class="c-check"><input type="checkbox" id="checkAll" aria-label="Select all projects" /></span>
           <span class="c-title">Title</span>
           <span class="c-owner">Owner</span>
           <span class="c-mod" id="colMod">Last modified</span>

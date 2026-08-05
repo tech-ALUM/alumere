@@ -94,13 +94,10 @@ button { font-family: inherit; cursor: pointer; }
 }
 .brand .name { font-weight: 700; font-size: 16px; letter-spacing: .2px; }
 .brand .thin { font-weight: 300; opacity: .85; margin-left: 1px; }
-.brand .tag {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
-  background: rgba(253,204,229,.22); border: 1px solid rgba(253,204,229,.5);
-  color: #fde0ee; padding: 2px 7px; border-radius: 20px; margin-left: 4px;
-}
 
-.toolbar { display: flex; align-items: center; gap: 10px; }
+/* min-width:0 so the toolbar can actually be squeezed: without it the status chip inside
+   pushes the whole topbar past a narrow viewport instead of giving way. */
+.toolbar { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
 /* Settings dropdown (engine + editor theme): rarely-touched controls live behind ⚙
    instead of permanently occupying the toolbar. */
@@ -133,6 +130,10 @@ button { font-family: inherit; cursor: pointer; }
 .status {
   font-size: 12px; padding: 4px 10px; border-radius: 20px;
   border: 1px solid transparent; min-width: 84px; text-align: center;
+  /* One line, always. The bar is a fixed 50px and these messages are sentences ("5 projects
+     moved to trash ✓"): left to wrap, the chip grows to three or four lines and bursts out
+     of the topbar on a narrow window. Truncated text stays readable through the tooltip. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .status:empty { display: none; }   /* an idle chip with nothing to say reserves no space */
 .status.idle { color: #cdd9e3; background: rgba(255,255,255,.10); }
@@ -646,7 +647,7 @@ body.dragging .pdf-scroll { pointer-events: none; }
   border: 1px solid var(--line); border-radius: 12px; overflow: visible;
 }
 .proj-list-head, .proj-row {
-  display: grid; grid-template-columns: minmax(0,1fr) 160px 210px 150px;
+  display: grid; grid-template-columns: 22px minmax(0,1fr) 160px 210px 150px;
   align-items: center; gap: 12px; padding: 10px 16px;
 }
 .proj-list-head {
@@ -719,10 +720,44 @@ body.dragging .pdf-scroll { pointer-events: none; }
   .newproj { width: auto; }
   .side-nav { flex-direction: row; }
   .home-main { padding: 16px; }
-  .proj-list-head, .proj-row { grid-template-columns: minmax(0,1fr) 130px 64px; }
+  .proj-list-head, .proj-row { grid-template-columns: 22px minmax(0,1fr) 130px 64px; }
   .proj-list-head .c-owner, .proj-row .c-owner { display: none; }
   .proj-row .row-zip, .proj-row .row-pdf { display: none; }
+  /* The row's 🏷 only appears on hover, which a narrow (usually touch) screen hasn't got —
+     so it was costing 32px of the title for a button nobody could reach. The bulk bar's
+     Tags does the same job here: tick the row, hit Tags. */
+  .proj-row .tag-add { display: none; }
+  /* Four bulk buttons plus a title won't share a line at this width: let the head wrap and
+     give the bar a row of its own rather than shrinking the buttons until they lie. */
+  .home-main-head { flex-wrap: wrap; }
+  .bulk-bar { flex: 1 0 100%; justify-content: flex-start; }
 }
+
+/* ---------- bulk selection (checkbox column + actions bar) ---------- */
+/* Native checkboxes on purpose: accent-color paints them in the app's blue, color-scheme
+   (set on :root for both themes) makes them legible in the dark, and keyboard + the
+   indeterminate state come for free — a hand-rolled div would owe all three. */
+.c-check { display: flex; align-items: center; justify-content: center; }
+.c-check input {
+  width: 15px; height: 15px; margin: 0; flex: 0 0 auto;
+  accent-color: var(--accent); cursor: pointer;
+}
+.c-check input:disabled { cursor: default; opacity: .4; }
+/* Hover already tints a row, so selection needs its own mark that survives the mouse
+   leaving: the accent bar down the left edge is what says "this one is picked". */
+.proj-row.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bulk-bar[hidden] { display: none; }   /* the display:flex above outranks [hidden]'s own */
+.bulk-count { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+/* .btn is dressed for the dark topbar (pale text on a translucent white); down here it sits
+   on the light panel, so these take the page's colours instead — the same move .confirm-actions
+   makes. The delete button keeps its coral: .btn.danger outranks a single class. */
+.bulk-act {
+  font-size: 12.5px; padding: 6px 10px;
+  border-color: var(--line); background: var(--panel); color: var(--ink);
+}
+.bulk-act:hover { background: var(--accent-soft); border-color: var(--accent-d); }
 
 /* ---------- trash (soft delete) ---------- */
 /* "Empty trash" sits next to the view title; the auto margin is what keeps the search box

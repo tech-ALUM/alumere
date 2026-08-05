@@ -4,6 +4,7 @@
 // archive/restore, and tag them. Tags are SHARED: the whole library sees the same set.
 // Deleting is two-stage: the row action moves a project to the TRASH (undoable), and only
 // from the Trash view can it be destroyed for good. Both steps ask first — see confirmDialog.
+// Rows can also be picked with the checkbox column and acted on together — see "selection".
 
 const rowsEl = document.getElementById("rows");
 const listEl = document.getElementById("list");
@@ -20,16 +21,35 @@ const countTrashEl = document.getElementById("countTrash");
 const viewTitleEl = document.getElementById("viewTitle");
 const colModEl = document.getElementById("colMod");
 const emptyTrashBtn = document.getElementById("emptyTrashBtn");
+const searchBoxEl = document.getElementById("searchBox");
+const bulkBarEl = document.getElementById("bulkBar");
+const bulkCountEl = document.getElementById("bulkCount");
+const checkAllEl = document.getElementById("checkAll");
+const bulkBtn = (id) => document.getElementById(id);
 
 let PROJECTS = [];              // last loaded list, unfiltered (trash included)
 let TAGS = [];                  // tag registry [{id,name,color}]
 let query = "";
 let view = { kind: "all" };     // { kind:'all'|'archived'|'trash'|'untagged' } | { kind:'tag', id }
+let selected = new Set();       // picked project ids — see "selection"
 
 // Client mirror of the server tag palette (for the swatches).
 const TAG_COLORS = ["#7eb0d5", "#bd7ebe", "#8bd450", "#ffb55a", "#fd7f6f", "#e879b9", "#5ec8c0", "#9a8cff"];
 
-function setStatus(kind, text) { statusEl.className = "status " + kind; statusEl.textContent = text; }
+// The chip is one line and clips: the tooltip is where a truncated message stays readable.
+// A success message is a receipt for something that has just happened, so it expires: without
+// this it sat in the corner until the next load() — walk from the emptied trash back to the
+// library and "Trash emptied ✓" was still there, describing a screen you'd left. Errors do
+// NOT expire (those you have to be able to read), and busy states are replaced by whatever
+// finishes them.
+let statusTimer = null;
+function setStatus(kind, text) {
+  statusEl.className = "status " + kind;
+  statusEl.textContent = text;
+  statusEl.title = text;
+  clearTimeout(statusTimer);
+  if (kind === "ok") statusTimer = setTimeout(() => setStatus("idle", ""), 4000);
+}
 const openProject = (id) => { location.href = "editor.html?p=" + encodeURIComponent(id); };
 function fmtAbs(s) { try { return new Date(s).toLocaleString(); } catch { return ""; } }
 const enc = encodeURIComponent;
@@ -115,6 +135,39 @@ function emptyMsg() {
   }
 }
 
+// ---------- selection (bulk actions) ----------
+// The Set holds ids, but every action works on the ones you can SEE: `targets()` intersects
+// it with the current list. That way typing in the search only narrows what the toolbar is
+// about — it never silently throws a selection away, and clearing the search brings it back
+// (Overleaf's model). Changing view is a different job, so that does clear it.
+const targets = () => currentList().filter((p) => selected.has(p.id));
+
+function renderBulk(list) {
+  const n = list.filter((p) => selected.has(p.id)).length;
+  bulkBarEl.hidden = n === 0;
+  searchBoxEl.hidden = n > 0;
+  bulkCountEl.textContent = `${n} selected`;
+  const trash = view.kind === "trash", arch = view.kind === "archived";
+  // Tags stay available in the archive (our per-row 🏷 is, and hiding it here would make the
+  // bar contradict the row); the trash keeps to the two actions its rows already offer.
+  bulkBtn("bkTags").hidden = trash;
+  bulkBtn("bkZip").hidden = trash;
+  bulkBtn("bkArch").hidden = trash || arch;
+  bulkBtn("bkUnarch").hidden = !arch;
+  bulkBtn("bkTrash").hidden = trash;
+  bulkBtn("bkUntrash").hidden = !trash;
+  bulkBtn("bkDel").hidden = !trash;
+  checkAllEl.checked = list.length > 0 && n === list.length;
+  checkAllEl.indeterminate = n > 0 && n < list.length;
+  checkAllEl.disabled = list.length === 0;
+}
+
+checkAllEl.addEventListener("change", () => {
+  const list = currentList();
+  for (const p of list) checkAllEl.checked ? selected.add(p.id) : selected.delete(p.id);
+  renderMain();
+});
+
 // ---------- render ----------
 function render() { renderSidebar(); renderMain(); }
 
@@ -178,6 +231,7 @@ function renderMain() {
       for (const p of list) rowsEl.appendChild(rowFor(p));
     }
   }
+  renderBulk(trulyEmpty ? [] : list);
   footEl.textContent = trulyEmpty ? "" : `${list.length} project${list.length === 1 ? "" : "s"}`;
 }
 
@@ -208,10 +262,11 @@ function rowFor(p) {
   // A trashed row isn't a way into the project: it opens nothing on click, so nobody edits
   // a project that's on death row (and then loses the work when the trash is emptied).
   // Restore first — it's one click, and it puts the project back where it came from.
-  row.className = "proj-row" + (trashed ? " trashed" : "");
+  row.className = "proj-row" + (trashed ? " trashed" : "") + (selected.has(p.id) ? " sel" : "");
   if (!trashed) { row.tabIndex = 0; row.setAttribute("role", "button"); }
   row.dataset.id = p.id;
   row.innerHTML = `
+    <div class="c-check"><input type="checkbox" class="row-check" /></div>
     <div class="c-title">
       <span class="proj-row-icon">∑</span>
       <span class="proj-row-name"></span>
@@ -241,6 +296,18 @@ function rowFor(p) {
   row.querySelector(".mod-by").textContent = by ? ` · ${by}` : "";
   fillChips(row.querySelector(".tag-chips"), p, !trashed);
 
+  // Picking a row must never open it: the whole cell swallows the click, not just the box,
+  // so the few pixels of padding around the checkbox don't navigate away either.
+  const cb = row.querySelector(".row-check");
+  cb.checked = selected.has(p.id);
+  cb.setAttribute("aria-label", `Select "${p.name || "Untitled"}"`);
+  row.querySelector(".c-check").addEventListener("click", (e) => e.stopPropagation());
+  cb.addEventListener("change", () => {
+    cb.checked ? selected.add(p.id) : selected.delete(p.id);
+    row.classList.toggle("sel", cb.checked);
+    renderBulk(currentList());
+  });
+
   const stop = (sel, fn) => { const el = row.querySelector(sel); el.addEventListener("click", (e) => { e.stopPropagation(); fn(el); }); };
   if (trashed) {
     stop(".row-restore", () => restoreFromTrash(p));
@@ -248,8 +315,10 @@ function rowFor(p) {
     return row;
   }
   row.addEventListener("click", () => openProject(p.id));
-  row.addEventListener("keydown", (e) => { if (e.key === "Enter") openProject(p.id); });
-  stop(".tag-add", (el) => openTagMenu(p, el));
+  // Only when the row itself has focus — Enter on the checkbox (or on any control inside it)
+  // is meant for that control, not an invitation to leave the page.
+  row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) openProject(p.id); });
+  stop(".tag-add", (el) => openTagMenu([p], el));
   stop(".row-ren", () => renameProject(p));
   stop(".row-zip", () => downloadBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`, "Preparing the zip…"));
   stop(".row-pdf", () => downloadBlob(`/api/projects/${enc(p.id)}/pdf`, `${safeFile(p.name)}.pdf`, "Compiling the PDF…"));
@@ -279,7 +348,12 @@ function placePopover(pop, anchor) {
 }
 
 // The 🏷 assign menu: toggle existing tags (stays open, live), or create-and-assign a new one.
-function openTagMenu(p, anchor) {
+// Takes a LIST of projects, so the row button (one) and the bulk bar (many) share it. With
+// several projects the tick means "all of them carry this tag" — Overleaf's rule, kept: a
+// click removes it from everyone when they all have it, otherwise it adds it to the ones
+// missing it, which is what "add to tag" has to mean for a mixed pick.
+function openTagMenu(projects, anchor) {
+  if (!projects.length) return;
   if (popoverClose) popoverClose();
   const pop = document.createElement("div");
   pop.className = "tag-pop assign";
@@ -300,20 +374,25 @@ function openTagMenu(p, anchor) {
       pop.appendChild(em);
     }
     for (const t of TAGS) {
-      const has = (p.tags || []).includes(t.id);
+      const all = projects.every((q) => (q.tags || []).includes(t.id));
       const item = document.createElement("button");
-      item.className = "tag-menu-item" + (has ? " on" : "");
-      item.innerHTML = `<span class="tag-check">${has ? "✓" : ""}</span><span class="tag-dot"></span><span class="tm-name"></span>`;
+      item.className = "tag-menu-item" + (all ? " on" : "");
+      item.innerHTML = `<span class="tag-check">${all ? "✓" : ""}</span><span class="tag-dot"></span><span class="tm-name"></span>`;
       item.querySelector(".tag-dot").style.setProperty("--tc", t.color);
       item.querySelector(".tm-name").textContent = t.name;
       item.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const next = has ? (p.tags || []).filter((x) => x !== t.id) : [...(p.tags || []), t.id];
         try {
-          await setProjectTags(p, next);
+          for (const q of projects) {
+            const has = (q.tags || []).includes(t.id);
+            if (all) await setProjectTags(q, (q.tags || []).filter((x) => x !== t.id));
+            else if (!has) await setProjectTags(q, [...(q.tags || []), t.id]);
+          }
           renderSidebar();
-          if (!inView(p)) { close(); renderMain(); }
-          else { build(); refreshRowChips(p); placePopover(pop, anchor); }
+          // Untagging inside a tag view empties the rows out from under us, and redrawing
+          // the list destroys the row button this popover hangs off — so leave with them.
+          if (projects.some((q) => !inView(q))) { close(); renderMain(); }
+          else { build(); projects.forEach(refreshRowChips); placePopover(pop, anchor); }
         } catch { setStatus("err", "Operation failed"); }
       });
       pop.appendChild(item);
@@ -326,7 +405,9 @@ function openTagMenu(p, anchor) {
       e.stopPropagation();
       close();
       const t = await openCreateTag(anchor);
-      if (t) { try { await setProjectTags(p, [...(p.tags || []), t.id]); } catch {} await load(); }
+      if (!t) return;
+      try { for (const q of projects) await setProjectTags(q, [...(q.tags || []), t.id]); } catch {}
+      await load();
     });
     pop.appendChild(add);
   };
@@ -466,15 +547,16 @@ function confirmDialog({ title, body, confirmLabel, danger = false }) {
 const IRREVERSIBLE = "This action is irreversible. Are you sure you want to continue?";
 
 // ---------- row actions ----------
-async function downloadBlob(url, filename, busyMsg) {
-  setStatus("busy", busyMsg);
+// Fetch a URL and hand the body to the browser as a download. Returns null on success or
+// the message to show, so the single-project button and the bulk loop (which counts them)
+// can each report failure their own way.
+async function saveBlob(url, filename) {
   try {
     const res = await fetch(url);
     if (!res.ok) {
       let msg = "Operation failed";
       try { msg = (await res.json()).error || msg; } catch {}
-      setStatus("err", msg);
-      return;
+      return msg;
     }
     const blob = await res.blob();
     const a = document.createElement("a");
@@ -482,8 +564,25 @@ async function downloadBlob(url, filename, busyMsg) {
     a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    setStatus("ok", "Done ✓");
-  } catch { setStatus("err", "Download failed"); }
+    return null;
+  } catch { return "Download failed"; }
+}
+
+async function downloadBlob(url, filename, busyMsg) {
+  setStatus("busy", busyMsg);
+  const err = await saveBlob(url, filename);
+  setStatus(err ? "err" : "ok", err || "Done ✓");
+}
+
+// The write endpoints all answer {ok:false,error} on refusal — turn that into a throw once,
+// so the bulk loops can just count what blew up.
+async function postJson(url, body, method = "POST") {
+  const res = await fetch(url, {
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({ ok: res.ok }));
+  if (!data.ok) throw new Error(data.error || "Operation failed");
+  return data;
 }
 
 async function toggleArchive(p, archived) {
@@ -501,12 +600,7 @@ async function toggleArchive(p, archived) {
 // ---------- trash: move / restore / destroy ----------
 async function setTrashed(p, deleted, busyMsg) {
   setStatus("busy", busyMsg);
-  const res = await fetch(`/api/projects/${enc(p.id)}/trash`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deleted }),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "Operation failed");
-  return data;
+  return postJson(`/api/projects/${enc(p.id)}/trash`, { deleted });
 }
 
 async function moveToTrash(p) {
@@ -569,6 +663,98 @@ async function emptyTrash() {
   }
   await load();
   setStatus(failed ? "err" : "ok", failed ? `${failed} of ${n} could not be deleted` : "Trash emptied ✓");
+}
+
+// ---------- bulk actions ----------
+// All of these are loops over the per-project endpoints — no new server surface. Sequential
+// on purpose: parallel writes to the same meta files buy nothing here, and a burst makes a
+// partial failure impossible to report honestly ("3 of 7 failed" needs the count).
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+// Every action that runs through here takes the projects OUT of the view you ran it from,
+// so the selection is dropped: leaving a tick behind would resurrect it the moment you
+// walked into the view the projects moved to. Tagging and downloading keep theirs.
+async function bulkRun(verb, items, fn, doneMsg) {
+  let failed = 0, i = 0;
+  for (const p of items) {
+    setStatus("busy", `${verb} ${++i}/${items.length}…`);
+    try { await fn(p); } catch { failed++; }
+  }
+  selected.clear();
+  await load();
+  setStatus(failed ? "err" : "ok", failed ? `${failed} of ${items.length} failed` : doneMsg());
+}
+
+async function bulkArchive(archived) {
+  const items = targets();
+  if (!items.length) return;
+  await bulkRun(archived ? "Archiving" : "Restoring", items,
+    (p) => postJson(`/api/projects/${enc(p.id)}/archive`, { archived }),
+    () => `${plural(items.length, "project")} ${archived ? "archived" : "restored"} ✓`);
+}
+
+async function bulkTrash() {
+  const items = targets();
+  if (!items.length) return;
+  const n = items.length;
+  const ok = await confirmDialog({
+    title: n === 1 ? "Move to trash?" : `Move ${n} projects to trash?`,
+    body: `${n === 1 ? `"${items[0].name}"` : plural(n, "project")} will be moved to the trash, for everyone. ` +
+      `You can restore ${n === 1 ? "it" : "them"} from there — nothing is deleted yet.`,
+    confirmLabel: "Move to trash",
+  });
+  if (!ok) return;
+  await bulkRun("Moving to trash", items,
+    (p) => postJson(`/api/projects/${enc(p.id)}/trash`, { deleted: true }),
+    () => `${plural(n, "project")} moved to trash ✓`);
+}
+
+async function bulkUntrash() {
+  const items = targets();
+  if (!items.length) return;
+  let renamed = 0;
+  await bulkRun("Restoring", items,
+    async (p) => {
+      const d = await postJson(`/api/projects/${enc(p.id)}/trash`, { deleted: false });
+      if (d.name && d.name !== p.name) renamed++;
+    },
+    // Said out loud for the same reason the single restore says it: a project that quietly
+    // comes back as "Thesis (2)" reads as a bug, not as the name having been taken meanwhile.
+    () => `${plural(items.length, "project")} restored ✓${renamed ? ` (${renamed} renamed)` : ""}`);
+}
+
+async function bulkDeleteForever() {
+  const items = targets();
+  if (!items.length) return;
+  const n = items.length;
+  const ok = await confirmDialog({
+    title: n === 1 ? "Delete permanently?" : `Delete ${n} projects permanently?`,
+    body: `${n === 1 ? `"${items[0].name}"` : plural(n, "project")} will be destroyed for everyone, with all ` +
+      `${n === 1 ? "its" : "their"} files, history and comments. ${IRREVERSIBLE}`,
+    confirmLabel: `Delete ${plural(n, "project")}`,
+    danger: true,
+  });
+  if (!ok) return;
+  await bulkRun("Deleting", items,
+    (p) => postJson(`/api/projects/${enc(p.id)}`, {}, "DELETE"),
+    () => `${plural(n, "project")} deleted permanently ✓`);
+}
+
+// One .zip per project, one after the other — Tommy's call, the alternative being a new
+// server endpoint that packs the lot into a single archive. Browsers ask for permission at
+// the second file ("allow multiple downloads?"), so the counter in the status chip is what
+// gives the pause a meaning. The selection survives: nothing about the projects changed.
+async function bulkDownload() {
+  const items = targets();
+  if (!items.length) return;
+  let failed = 0, i = 0;
+  for (const p of items) {
+    setStatus("busy", `Downloading ${++i}/${items.length}…`);
+    if (await saveBlob(`/api/projects/${enc(p.id)}/download`, `${safeFile(p.name)}.zip`)) failed++;
+    if (i < items.length) await new Promise((r) => setTimeout(r, 350));
+  }
+  setStatus(failed ? "err" : "ok",
+    failed ? `${failed} of ${items.length} failed` : `${plural(items.length, "zip")} downloaded ✓`);
 }
 
 async function renameProject(p) {
@@ -648,11 +834,23 @@ sideAside.addEventListener("click", (e) => {
   const item = e.target.closest("[data-view]");
   if (!item) return;
   view = item.dataset.view === "tag" ? { kind: "tag", id: item.dataset.tag } : { kind: item.dataset.view };
+  // Walking into another view is a new job — unlike the search, which only narrows the one
+  // you're already doing, so it leaves the picks alone.
+  selected.clear();
   render();
 });
 async function onNewTag(anchor) { const t = await openCreateTag(anchor); if (t) await load(); }
 searchEl.addEventListener("input", () => { query = searchEl.value; renderMain(); });
 emptyTrashBtn.addEventListener("click", emptyTrash);
+
+// ---------- bulk bar ----------
+bulkBtn("bkTags").addEventListener("click", (e) => { e.stopPropagation(); openTagMenu(targets(), e.currentTarget); });
+bulkBtn("bkZip").addEventListener("click", bulkDownload);
+bulkBtn("bkArch").addEventListener("click", () => bulkArchive(true));
+bulkBtn("bkUnarch").addEventListener("click", () => bulkArchive(false));
+bulkBtn("bkTrash").addEventListener("click", bulkTrash);
+bulkBtn("bkUntrash").addEventListener("click", bulkUntrash);
+bulkBtn("bkDel").addEventListener("click", bulkDeleteForever);
 
 // Wait until the user is identified (auth.js) before loading the library.
 (window.Alumere ? window.Alumere.ready : Promise.resolve()).then(load);
