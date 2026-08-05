@@ -1125,7 +1125,11 @@ body[data-editor-theme="overleaf-dark"]{
 .hist-actions .btn:hover { background: var(--accent-soft); }
 .hist-actions .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .hist-actions .btn.primary:hover { background: #6aa6d0; }
-.hist-actions .btn:disabled { opacity: .45; cursor: default; background: var(--panel); }
+/* Disabled Restore ("this IS the current version"). The accent background goes, so the
+   accent-ink text it was written for has nothing left to sit on: at .45 opacity the word
+   simply disappeared on the dark panel. A muted foreground and a neutral border say
+   "disabled" while staying readable — a control you can't read can't explain itself. */
+.hist-actions .btn:disabled { opacity: .85; cursor: default; background: var(--panel); border-color: var(--line); color: var(--muted); }
 
 .hist-compare { display: flex; align-items: center; gap: 6px; padding: 8px 18px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .hist-seg {

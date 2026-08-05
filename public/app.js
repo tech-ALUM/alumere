@@ -1084,7 +1084,15 @@ async function renderPdf() {
       pagesEl.replaceChildren(...canvases);
       renderedZoom = zoom;
       renderedFit = fitScale;
-      naturalW = pagesEl.offsetWidth;
+      // Width from the CONTENT — the widest canvas plus the layer's padding — and never from
+      // the layer's own box: .pdf-pages is a block inside .pdf-sizer, so its offsetWidth IS
+      // whatever width the sizer was last given. Reading it there made the sizer a running
+      // product of its own past values, and a sizer left wider than the pane is a page you
+      // can drag sideways even though it fits, with a scrollbar under it. It also meant
+      // `.pdf-sizer { margin: 0 auto }` never centred anything: the sizer always filled the
+      // pane. Height is safe to measure: a block's height is its content's.
+      const pad = 2 * (parseFloat(getComputedStyle(pagesEl).paddingLeft) || 0);
+      naturalW = Math.max(...canvases.map((c) => c.offsetWidth)) + pad;
       naturalH = pagesEl.offsetHeight;
       pdfSizer.style.width = naturalW + "px";
       pdfSizer.style.height = naturalH + "px";
