@@ -237,13 +237,19 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 .mini:hover { background: var(--accent-soft); }
 .tabbtn { color: var(--muted); }
 .tabbtn.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-/* Square icon buttons (tree header, upload dialog) — same palette as .mini. */
+/* Square icon buttons (tree header, PDF toolbar, upload dialog) — same palette as .mini.
+   `position: relative` anchors a count badge; `flex: 0 0 auto` keeps them from being
+   squashed out of square when their row runs out of room (giro 9). */
 .iconbtn {
+  position: relative; flex: 0 0 auto;
   width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
   border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel); color: var(--accent-d); cursor: pointer;
 }
 .iconbtn:hover { background: var(--accent-soft); }
+.iconbtn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.iconbtn:disabled { opacity: .4; cursor: default; }
+.iconbtn:disabled:hover { background: var(--panel); }
 
 /* ---------- File tree ---------- */
 .tree { list-style: none; margin: 0; padding: 6px 4px; overflow: auto; flex: 1; }
@@ -379,16 +385,91 @@ body[data-conn="offline"] .offline-bar { display: flex; }
 }
 @keyframes sync-flash-fade { 0%, 45% { opacity: 1; } 100% { opacity: 0; } }
 
-/* Zoom controls, shown only over the PDF tab. */
-.zoombar { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
-.zoombtn, .zoomlabel {
-  font: 600 12px/1 var(--ui-font); color: var(--muted);
-  border: 1px solid var(--line); background: var(--panel);
-  padding: 3px 7px; border-radius: 5px; text-transform: none; letter-spacing: 0;
+/* ---------- PDF toolbar (giro 10) ----------
+   Overleaf's layout, in our pane header: build controls left (history · compile · log ·
+   download), view controls right (pages · zoom). Everything is sized to live inside the
+   shared --head-h, so this header stays on the same band as the file tree's and the
+   editor's — a taller PDF header would break that line across the whole app. */
+.pdf-toolbar { gap: 8px; padding: 0 8px; }
+.pdftb-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* A pane dragged narrow drops the VIEW controls (the PDF still scrolls, and pinch still
+   zooms); the build controls never go — losing Compile because the pane got thin would be
+   the one thing you can't work around. The attributes come from a ResizeObserver on the
+   header (see setupZoom), which owns the thresholds. */
+.pdf-toolbar[data-tight] .pagenav { display: none; }
+.pdf-toolbar[data-tighter] .zoombar { display: none; }
+
+/* Compile: one button that reports until you point at it, then offers. The two faces are
+   stacked in the same grid cell, so the button is as wide as the wider one and the layout
+   never shifts on hover. Busy is `disabled` — nothing to point at, nothing to press. */
+.cbtn {
+  display: grid; align-items: center; height: 26px; min-width: 112px; padding: 0 11px; border-radius: 7px;
+  border: 1px solid var(--accent-d); background: var(--accent); color: var(--accent-ink);
+  font: 600 12px/1 var(--ui-font); white-space: nowrap; flex: 0 0 auto;
 }
-.zoombtn { min-width: 24px; }
-.zoomlabel { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
-.zoombtn:hover, .zoomlabel:hover { background: var(--accent-soft); color: var(--accent-d); }
+.cbtn-face { grid-area: 1 / 1; display: flex; align-items: center; justify-content: center; gap: 5px; }
+.cbtn-alt { opacity: 0; }
+.cbtn[data-state="idle"]:hover { background: var(--accent-d); }
+.cbtn[data-state="busy"] { background: var(--orange); border-color: #e79f45; color: #5a3a06; cursor: default; }
+.cbtn[data-state="ok"]   { background: var(--lime);   border-color: #9ccc4e; color: #2a4209; }
+.cbtn[data-state="err"]  { background: var(--coral);  border-color: #e8705f; color: #5a1a10; }
+/* Only a finished build can be re-run: on a never-compiled project the label stays
+   "Compile" (offering to RE-compile something that doesn't exist would be a lie). */
+.cbtn:is([data-state="ok"], [data-state="err"]):is(:hover, :focus-visible) {
+  background: var(--accent); border-color: var(--accent-d); color: var(--accent-ink);
+}
+.cbtn:is([data-state="ok"], [data-state="err"]):is(:hover, :focus-visible) .cbtn-face { opacity: 0; }
+.cbtn:is([data-state="ok"], [data-state="err"]):is(:hover, :focus-visible) .cbtn-alt { opacity: 1; }
+.cbtn-spin {
+  display: none; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: cbtn-spin .7s linear infinite;
+}
+.cbtn[data-state="busy"] .cbtn-spin { display: block; }
+@keyframes cbtn-spin { to { transform: rotate(360deg); } }
+
+/* Count badge riding an icon button (the log's errors/warnings). */
+.tb-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: 8px; font: 700 9px/13px var(--ui-font); text-align: center;
+  background: var(--coral); color: #5a1a10; border: 1px solid var(--panel-2);
+}
+.tb-badge[data-kind="warning"] { background: var(--orange); color: #5a3a06; }
+.tb-badge[hidden] { display: none; }   /* an author `display` would beat the UA rule */
+
+/* Page navigation: chevrons + a page you can type into, "n / N" like Overleaf. */
+.pagenav { display: flex; align-items: center; gap: 4px; }
+.pagenum {
+  width: 36px; height: 22px; padding: 0 4px; text-align: center; flex: 0 0 auto;
+  font: 600 11px/1 var(--ui-font); font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink);
+}
+.pagenum:focus { outline: none; border-color: var(--accent-d); }
+.pagetot {
+  font: 600 11px/1 var(--ui-font); color: var(--muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* Zoom controls, shown only over the PDF tab. The percentage is of the page's REAL size
+   (Overleaf's meaning), so "Fit to width" and "100%" are genuinely different things. */
+.zoombar { display: flex; align-items: center; gap: 4px; }
+.zoomlabel {
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  height: 24px; min-width: 58px; padding: 0 6px; flex: 0 0 auto;
+  font: 600 11px/1 var(--ui-font); font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted);
+}
+.zoomlabel:hover { background: var(--accent-soft); color: var(--accent-d); }
+.zoomlabel .caret { font-size: 9px; opacity: .8; }
+.zoom-pop { min-width: 152px; padding: 5px; gap: 0; }
+.zoom-item {
+  display: block; width: 100%; text-align: left; padding: 6px 10px;
+  border: 0; border-radius: 6px; background: none; color: var(--ink);
+  font: 500 12.5px/1 var(--ui-font);
+}
+.zoom-item:hover { background: var(--accent-soft); }
+.zoom-item[aria-current="true"] { color: var(--accent-d); font-weight: 700; }
+.zoom-sep { height: 1px; margin: 5px 4px; background: var(--line); }
 
 /* While a splitter is being dragged: freeze the cursor, kill text selection, and keep the
    preview from capturing the mouse (which would fight the drag). */
@@ -424,10 +505,6 @@ body.dragging .pdf-scroll { pointer-events: none; }
 .issue.warning .issue-badge { background: var(--orange); color: #5a3a06; }
 .issue-msg { flex: 1 1 auto; min-width: 0; line-height: 1.4; word-break: break-word; }
 .issue-loc { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
-.tab-badge {
-  display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 999px;
-  font-size: 10px; font-weight: 700; background: var(--coral); color: #5a1a10;
-}
 .hidden { display: none !important; }
 
 /* ---------- Splitters ---------- */

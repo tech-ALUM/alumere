@@ -23,15 +23,12 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
         </div>
       </div>
     </div>
+    <!-- Compile, its status, History, Download and the log moved into the PDF pane's own
+         toolbar (giro 10, Overleaf-style). What's left up here is about the ROOM, not the
+         build: who's in it and whether we're in sync with them. -->
     <div class="toolbar">
-      <button id="recompile" class="btn primary" title="Compile the PDF (Ctrl/Cmd+S)">
-        <span class="ic">▶</span> Compile
-      </button>
-      <button id="download" class="btn" title="Download the compiled PDF">Download PDF</button>
-      <button id="history" class="btn" title="Project version history"><span class="ic">🕘</span> History</button>
       <div id="presence" class="presence" aria-label="Who's online in this project"></div>
       <span id="collabState" class="status idle" title="Real-time collaboration status">…</span>
-      <span id="status" class="status idle">Ready</span>
     </div>
   </header>
 
@@ -169,16 +166,72 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
     </div>
 
     <section class="pane preview" id="previewPane">
-      <div class="pane-head">
-        <span>Preview</span>
-        <div class="pane-actions">
-          <div id="pdfZoomBar" class="zoombar hidden">
-            <button id="zoomOut" class="zoombtn" title="Zoom out">−</button>
-            <button id="zoomReset" class="zoomlabel" title="Fit width"><span id="pdfZoomLabel">100%</span></button>
-            <button id="zoomIn" class="zoombtn" title="Zoom in">＋</button>
+      <!-- PDF toolbar (giro 10), laid out like Overleaf's: build controls on the left,
+           view controls on the right. The old "Preview" title is gone — the toolbar names
+           the pane now, and the header has no room to spare. -->
+      <div class="pane-head pdf-toolbar" id="pdfToolbar">
+        <div class="pdftb-group">
+          <button id="history" class="iconbtn" title="Project version history">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.3 2.3v3.7h3.7"/><path d="M2.3 9.8a6.7 6.7 0 1 0 2.2-5.8L2.3 6"/><path d="M9 5.3V9l3 1.5"/></svg>
+          </button>
+          <!-- One button, two faces: it REPORTS (Compile / Compiling… / Compiled ✓ /
+               N errors) until you point at it, then it OFFERS (Recompile). Busy = disabled,
+               so there's nothing to point at. Both faces are always in the DOM, stacked in
+               the same grid cell: the button is as wide as the wider one and never jumps. -->
+          <button id="recompile" class="cbtn" data-state="idle" title="Compile the PDF (Ctrl/Cmd+S)">
+            <span class="cbtn-face">
+              <span class="cbtn-spin" aria-hidden="true"></span>
+              <span id="compileLabel">Compile</span>
+            </span>
+            <span class="cbtn-face cbtn-alt" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15.3 7.6A6.4 6.4 0 1 0 15.5 11"/><path d="M15.6 3.2v4.4h-4.4"/></svg>
+              Recompile
+            </span>
+          </button>
+          <button id="tabLog" class="iconbtn" title="Compilation log">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4.6h12M3 8.2h12M3 11.8h8.5M3 15.4h5.5"/></svg>
+            <span id="logBadge" class="tb-badge" hidden></span>
+          </button>
+          <button id="download" class="iconbtn" title="Download the compiled PDF">
+            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.7 11.2v3a1.5 1.5 0 0 1-1.5 1.5H3.8a1.5 1.5 0 0 1-1.5-1.5v-3"/><path d="M5.3 7.5 9 11.2l3.7-3.7"/><path d="M9 11.2V2.3"/></svg>
+          </button>
+        </div>
+        <div class="pdftb-group">
+          <div id="pdfPageNav" class="pagenav hidden">
+            <button id="pagePrev" class="iconbtn" title="Previous page">
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 11.2 9 6.6l4.5 4.6"/></svg>
+            </button>
+            <button id="pageNext" class="iconbtn" title="Next page">
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.8 9 11.4l4.5-4.6"/></svg>
+            </button>
+            <input id="pageNum" class="pagenum" type="text" inputmode="numeric" value="1"
+                   aria-label="Page number — type one to jump there" title="Page number — type one to jump there" />
+            <span class="pagetot">/ <span id="pageTotal">1</span></span>
           </div>
-          <button id="tabPdf" class="tabbtn active">PDF</button>
-          <button id="tabLog" class="tabbtn">Log</button>
+          <div id="pdfZoomBar" class="zoombar hidden">
+            <button id="zoomOut" class="iconbtn" title="Zoom out">
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9h10"/></svg>
+            </button>
+            <button id="zoomIn" class="iconbtn" title="Zoom in">
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9h10M9 4v10"/></svg>
+            </button>
+            <div class="menu zoom-menu" id="zoomMenu">
+              <button id="zoomBtn" class="zoomlabel" type="button" aria-haspopup="true" title="Zoom level">
+                <span id="pdfZoomLabel">100%</span><span class="caret">▾</span>
+              </button>
+              <div class="menu-pop zoom-pop" hidden>
+                <button class="zoom-item" type="button" data-zoom="width">Fit to width</button>
+                <button class="zoom-item" type="button" data-zoom="height">Fit to height</button>
+                <div class="zoom-sep"></div>
+                <button class="zoom-item" type="button" data-zoom="0.5">50%</button>
+                <button class="zoom-item" type="button" data-zoom="0.75">75%</button>
+                <button class="zoom-item" type="button" data-zoom="1">100%</button>
+                <button class="zoom-item" type="button" data-zoom="1.5">150%</button>
+                <button class="zoom-item" type="button" data-zoom="2">200%</button>
+                <button class="zoom-item" type="button" data-zoom="4">400%</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="preview-body">

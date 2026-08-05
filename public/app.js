@@ -91,7 +91,8 @@ function colorFor(seed) {
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
-const treeEl = $("tree"), editorHost = $("editor"), statusEl = $("status"), collabEl = $("collabState");
+const treeEl = $("tree"), editorHost = $("editor"), collabEl = $("collabState");
+const compileBtn = $("recompile"), compileLabel = $("compileLabel");
 const tabbarListEl = $("tabbarList"), editorEmptyEl = $("editorEmpty"), presenceEl = $("presence");
 const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues");
 const pdfScroll = $("pdfScroll"), pdfSizer = $("pdfSizer"), pagesEl = $("pdfPages");
@@ -754,7 +755,15 @@ function openFile(path) {
 }
 
 // ---------- Compile (stateless: send the current Yjs content to /api/compile) ----------
-function setStatus(kind, text) { statusEl.className = "status " + kind; statusEl.textContent = text; }
+// The status IS the button (giro 10): idle → "Compile", busy → "Compiling…" (disabled:
+// there's nothing useful to press mid-build), ok/err → the outcome, which turns into
+// "Recompile" under the pointer. Same signature as the old chip, so every caller —
+// including the history restore — keeps working unchanged.
+function setStatus(kind, text) {
+  compileBtn.dataset.state = kind;
+  compileBtn.disabled = kind === "busy";
+  compileLabel.textContent = text;
+}
 function b64ToBlob(b64, type) {
   const bin = atob(b64); const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
@@ -836,17 +845,30 @@ function gotoIssue(file, line) {
   view.focus();
 }
 
+// The log button wears the outcome (giro 10, Overleaf-style): red badge with the error
+// count, amber with the warning count when the build is otherwise clean, no badge at all
+// when there's nothing to report. It also doubles as the PDF/log switch, so its title
+// depends on which of the two is currently on screen.
+let logCounts = { err: 0, warn: 0 };
+function updateLogButton() {
+  const btn = $("tabLog"), badge = $("logBadge");
+  const { err, warn } = logCounts;
+  badge.hidden = !(err || warn);
+  badge.textContent = err || warn;
+  badge.dataset.kind = err ? "error" : "warning";
+  const showing = !logWrap.classList.contains("hidden");
+  const what = err ? `${err} error${err === 1 ? "" : "s"}`
+    : warn ? `${warn} warning${warn === 1 ? "" : "s"}` : "";
+  btn.classList.toggle("active", showing);
+  btn.title = showing ? "Back to the PDF" : "Compilation log" + (what ? ` — ${what}` : "");
+}
+
 function renderIssues(issues) {
   issuesEl.innerHTML = "";
   issuesEl.classList.toggle("hidden", !issues.length);
-  const tab = $("tabLog");
-  tab.textContent = "Log";
   const nErr = issues.filter((x) => x.kind === "error").length;
-  if (nErr) {
-    const b = document.createElement("span");
-    b.className = "tab-badge"; b.textContent = nErr;
-    tab.appendChild(b);
-  }
+  logCounts = { err: nErr, warn: issues.length - nErr };
+  updateLogButton();
   for (const it of issues) {
     const canJump = !!(it.line && (!it.file || hasPath(it.file)));
     const row = document.createElement(canJump ? "button" : "div");
@@ -871,7 +893,10 @@ function renderIssues(issues) {
 
 let pdfBlob = null;
 let compileStarted = false;   // once a real compile begins, the cached build must not apply
+let compiling = false;        // one build at a time — the button is disabled, ⌘S must agree
 async function compile() {
+  if (compiling) return;
+  compiling = true;
   compileStarted = true;
   setStatus("busy", "Compiling…");
   const files = flattenForCompile();
@@ -900,6 +925,8 @@ async function compile() {
     renderLog("The compile server isn't responding.\n→ " + e.message);
     renderIssues([]);
     setStatus("err", "Offline"); showTab("log");
+  } finally {
+    compiling = false;
   }
 }
 
@@ -934,9 +961,9 @@ function showTab(which) {
   const pdf = which === "pdf";
   pdfScroll.classList.toggle("hidden", !pdf);
   logWrap.classList.toggle("hidden", pdf);
-  $("tabPdf").classList.toggle("active", pdf);
-  $("tabLog").classList.toggle("active", !pdf);
+  updateLogButton();                                   // it IS the switch: active state + title
   $("pdfZoomBar").classList.toggle("hidden", !pdf || !pdfDoc);
+  $("pdfPageNav").classList.toggle("hidden", !pdf || !pdfDoc);
   // The divider arrow needs a PDF + its synctex map, but not the PDF tab in front:
   // jumping from the Log view is fine (flashPdfSpot switches to the PDF itself).
   $("syncForward").classList.toggle("hidden", !pdfDoc || !syncTex);
@@ -954,7 +981,16 @@ let zoom = 1;               // user multiplier over fit-width (continuous)
 let renderedZoom = 1;        // the zoom the current canvases were rasterised at
 let naturalW = 0, naturalH = 0;   // untransformed size of the pages layer, in px
 let renderTimer = null, rendering = false, pendingRender = false;
-const ZOOM_MIN = 0.1, ZOOM_MAX = 5;
+// Two different scales meet here. Internally `zoom` is a multiplier over fit-width (1 = the
+// page exactly fills the pane), because that's what the pinch/resize maths wants. What the
+// toolbar SHOWS is Overleaf's number: a percentage of the page's real size, where 100% is
+// the page at 96dpi — that's the only reading in which "Fit to width" and "100%" are two
+// different things worth having in the same menu. CSS_UNITS is the bridge (pdf.js's own).
+const CSS_UNITS = 96 / 72;
+const PCT_MIN = 10, PCT_MAX = 400;
+const pctOfZoom = (z) => (fitScale * z * 100) / CSS_UNITS;
+const zoomOfPct = (p) => ((p / 100) * CSS_UNITS) / fitScale;
+const clampZoom = (z) => Math.max(zoomOfPct(PCT_MIN), Math.min(zoomOfPct(PCT_MAX), z));
 
 async function ensurePdfjs() {
   if (pdfjsLib) return pdfjsLib;
@@ -972,8 +1008,11 @@ async function loadPdf(base64) {
   pdfDoc = doc;
   pdfPageList = [];
   for (let i = 1; i <= doc.numPages; i++) pdfPageList.push(await doc.getPage(i));
+  pageCount = doc.numPages;
+  $("pageTotal").textContent = pageCount;
   computeFitScale();
   await renderPdf();
+  updatePageIndicator();
 }
 
 function computeFitScale() {
@@ -1025,6 +1064,7 @@ async function renderPdf() {
       pdfSizer.style.width = naturalW + "px";
       pdfSizer.style.height = naturalH + "px";
       updateZoomLabel();
+      updatePageIndicator();
     } while (pendingRender);                                   // a newer zoom came in mid-render
   } finally {
     rendering = false;
@@ -1044,17 +1084,77 @@ function applyTransform() {
   pdfSizer.style.width = (naturalW * k) + "px";
   pdfSizer.style.height = (naturalH * k) + "px";
   updateZoomLabel();
+  updatePageIndicator();   // a zoom moves the pages under a fixed scrollTop: re-read which one
 }
 
+// The zoom the page is drawn at, as a percentage of its real size, plus a tick next to the
+// preset that matches — so the menu tells you where you are, not just where you can go.
 function updateZoomLabel() {
   const lbl = $("pdfZoomLabel");
-  if (lbl) lbl.textContent = Math.round(zoom * 100) + "%";
+  if (!lbl) return;
+  const pct = pctOfZoom(zoom);
+  lbl.textContent = Math.round(pct) + "%";
+  const fitH = fitHeightZoom();
+  for (const item of document.querySelectorAll(".zoom-item")) {
+    const v = item.dataset.zoom;
+    const on = v === "width" ? Math.abs(zoom - 1) < 0.005
+      : v === "height" ? Math.abs(zoom - fitH) < 0.005
+      : Math.abs(pct - Number(v) * 100) < 0.5;
+    if (on) item.setAttribute("aria-current", "true");
+    else item.removeAttribute("aria-current");
+  }
+}
+
+// Fit-to-height, expressed in our own units: the multiplier at which one whole page fits
+// the pane's height. Falls back to the current zoom while the pane has no layout yet.
+function fitHeightZoom() {
+  if (!pdfPageList.length) return zoom;
+  const h = previewBody.clientHeight;
+  if (!h) return zoom;
+  const vp = pdfPageList[0].getViewport({ scale: 1 });
+  return Math.max(120, h - 32) / vp.height / fitScale;   // minus .pdf-pages' padding
+}
+
+// ---------- Page navigation ----------
+// "Which page am I on" = the last one whose top has passed a probe a third of the way down
+// the viewport — that's where the eye actually is, and it doesn't flicker between pages the
+// way a viewport-top test does. Positions come from the canvases, scaled by the pinch
+// transform (k) so the answer is right mid-gesture too.
+let pageCount = 0, pageTick = false;
+function updatePageIndicator() {
+  if (!pdfDoc || !pagesEl.children.length) return;
+  const k = renderedZoom ? zoom / renderedZoom : 1;
+  const probe = pdfScroll.scrollTop + pdfScroll.clientHeight * 0.35;
+  let p = 1;
+  for (let i = 0; i < pagesEl.children.length; i++) {
+    if (pagesEl.children[i].offsetTop * k <= probe) p = i + 1;
+    else break;
+  }
+  setPageIndicator(p);
+}
+function setPageIndicator(p) {
+  const inp = $("pageNum");
+  if (document.activeElement !== inp) inp.value = String(p);   // don't fight someone typing
+  $("pagePrev").disabled = p <= 1;
+  $("pageNext").disabled = p >= pageCount;
+}
+function currentPageNum() {
+  return Math.max(1, Math.min(pageCount, parseInt($("pageNum").value, 10) || 1));
+}
+function goToPage(p) {
+  if (!pdfDoc || !pagesEl.children.length) return;
+  p = Math.max(1, Math.min(pageCount, Math.trunc(p) || 1));
+  const el = pagesEl.children[p - 1];
+  if (!el) return;
+  const k = renderedZoom ? zoom / renderedZoom : 1;
+  pdfScroll.scrollTop = Math.max(0, el.offsetTop * k - 8);
+  setPageIndicator(p);
 }
 
 // Change zoom keeping the content point under (clientX,clientY) fixed. Live bounding rects
 // keep it correct regardless of the auto-margin centring.
 function zoomAround(target, clientX, clientY) {
-  const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, target));
+  const next = clampZoom(target);
   if (Math.abs(next - zoom) < 1e-4) return;
   const before = pagesEl.getBoundingClientRect();
   const kOld = renderedZoom ? zoom / renderedZoom : 1;
@@ -1075,12 +1175,23 @@ function zoomToCenter(target) {
 
 function setupZoom() {
   if (!$("pdfZoomBar")) return;
-  $("zoomOut").addEventListener("click", () => zoomToCenter(zoom - 0.1));
-  $("zoomIn").addEventListener("click", () => zoomToCenter(zoom + 0.1));
-  // Back to fit-width. Same path as the buttons/pinch: instant transform feedback now, crisp
-  // re-render on settle — going straight to renderPdf() here could be superseded by an
-  // in-flight render and silently no-op.
-  $("zoomReset").addEventListener("click", () => { zoom = 1; applyTransform(); scheduleRender(); });
+  // Steps are multiplicative, so one click feels the same at 50% as at 400% (a fixed
+  // step of the multiplier would crawl once you're zoomed in).
+  $("zoomOut").addEventListener("click", () => zoomToCenter(zoom / 1.1));
+  $("zoomIn").addEventListener("click", () => zoomToCenter(zoom * 1.1));
+  // Presets, Overleaf's list. Fit-to-width is our native zoom = 1. They go through the same
+  // zoom-around-the-centre path as the buttons, so what you were reading stays where it was.
+  const menu = $("zoomMenu"), pop = menu.querySelector(".menu-pop");
+  $("zoomBtn").addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !menu.contains(e.target)) pop.hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) pop.hidden = true; });
+  for (const item of pop.querySelectorAll(".zoom-item")) {
+    item.addEventListener("click", () => {
+      pop.hidden = true;
+      const v = item.dataset.zoom;
+      zoomToCenter(v === "width" ? 1 : v === "height" ? fitHeightZoom() : zoomOfPct(Number(v) * 100));
+    });
+  }
   // Pinch (a Mac trackpad reports it as wheel+ctrlKey) or ⌘/Ctrl+wheel → smooth zoom around
   // the cursor. A plain wheel is left alone so it scrolls the pages.
   pdfScroll.addEventListener("wheel", (e) => {
@@ -1088,7 +1199,22 @@ function setupZoom() {
     e.preventDefault();
     zoomAround(zoom * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
   }, { passive: false });
-  // Keep "100% = fit width" as the pane is resized (splitter drag / window resize).
+  // Page navigation. The number is a plain input: type 12, press Enter, land on page 12.
+  $("pagePrev").addEventListener("click", () => goToPage(currentPageNum() - 1));
+  $("pageNext").addEventListener("click", () => goToPage(currentPageNum() + 1));
+  $("pageNum").addEventListener("focus", () => $("pageNum").select());
+  $("pageNum").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); goToPage(currentPageNum()); $("pageNum").blur(); }
+    if (e.key === "Escape") { updatePageIndicator(); $("pageNum").blur(); }
+  });
+  $("pageNum").addEventListener("blur", () => goToPage(currentPageNum()));
+  // Scrolling drives the indicator; one update per frame is plenty for a scroll event.
+  pdfScroll.addEventListener("scroll", () => {
+    if (pageTick) return;
+    pageTick = true;
+    requestAnimationFrame(() => { pageTick = false; updatePageIndicator(); });
+  }, { passive: true });
+  // Keep "zoom 1 = fit width" as the pane is resized (splitter drag / window resize).
   if (window.ResizeObserver) {
     let rt = null;
     new ResizeObserver(() => {
@@ -1096,6 +1222,14 @@ function setupZoom() {
       if (rt) clearTimeout(rt);
       rt = setTimeout(() => { computeFitScale(); renderPdf(); }, 150);
     }).observe(previewBody);
+    // A pane dragged narrow sheds the view controls rather than overflowing its header.
+    // Thresholds are the measured content widths: everything needs ~454px, and once the
+    // page navigation is gone what's left needs ~324px (contentRect excludes the padding).
+    new ResizeObserver(([e]) => {
+      const w = e.contentRect.width, tb = $("pdfToolbar");
+      tb.toggleAttribute("data-tight", w < 458);
+      tb.toggleAttribute("data-tighter", w < 328);
+    }).observe($("pdfToolbar"));
   }
 }
 
@@ -2306,6 +2440,10 @@ function setCollapsed(which) {
 // Anything that lands the user in the source (tree click, error row, review card, inverse
 // search) must bring a collapsed editor back, or the jump would be invisible.
 function revealEditor() { if (collapsedPane === "editor") setCollapsed(null); }
+// The compile controls now live in the PDF pane's header, so a compile fired from the
+// keyboard while that pane is collapsed has to bring it back — otherwise you'd be pressing
+// ⌘S into the void, with the result (and any error log) hidden behind a closed pane.
+function revealPreview() { if (collapsedPane === "preview") setCollapsed(null); }
 function setupSplitters() {
   document.querySelectorAll(".splitter").forEach((sp, i) => {
     sp.addEventListener("mousedown", (e) => {
@@ -3118,8 +3256,8 @@ async function init() {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(pdfBlob); a.download = slug(meta.name) + ".pdf"; a.click();
   });
-  $("tabPdf").addEventListener("click", () => showTab("pdf"));
-  $("tabLog").addEventListener("click", () => showTab("log"));
+  // One button for both views: it shows the log, and while the log is up it goes back.
+  $("tabLog").addEventListener("click", () => showTab(logWrap.classList.contains("hidden") ? "log" : "pdf"));
   // Side panels (giro 5): the icon rail swaps what the left column shows; clicking the
   // active icon again collapses the whole column (giro 7).
   $("railFiles").addEventListener("click", () => toggleSidePanel("files"));
@@ -3151,7 +3289,7 @@ async function init() {
     if (e.key === "Escape" && spellMenuEl && !spellMenuEl.hidden) { closeSpellMenu(); return; }
     if (e.key === "Escape" && commentDom && !commentDom.pop.hidden) { closeCommentOverlays(); return; }
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); compile(); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); revealPreview(); compile(); }
   });
 }
 init();
