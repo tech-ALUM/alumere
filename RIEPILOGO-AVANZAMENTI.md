@@ -7,6 +7,109 @@
 
 ---
 
+## 2026-08-02 (ter) — Giro 10: la barra strumenti del PDF alla Overleaf (il punto ④) ✅ (check di Tommy OK)
+
+Il punto rimandato dal giro 9, con le decisioni prese da Tommy. Come per i temi del giro 9,
+l'ordine dei controlli è preso dai file veri di Overleaf
+(`overleaf/overleaf`, `services/web/frontend/js/features/pdf-preview/components/`) invece che a
+occhio: a sinistra i comandi della **build**, a destra quelli della **vista**.
+
+**Cosa c'è ora nell'header del pannello PDF** — `[🕘] [Compile] [log] [⬇]` … `[⌃ ⌄ 1 / 7] [− + 57% ▾]`.
+La topbar in alto resta con le sole cose che riguardano la **stanza** e non la build: avatar delle
+presenze e stato del sync. Il titolo "Preview" è sparito: la barra dice già cos'è quel pannello, e
+in 487px non c'era spazio da regalare. Tutto è dimensionato per stare dentro `--head-h` (34px), così
+la fascia degli header resta allineata con quella dell'albero file e dei tab dell'editor — un header
+PDF più alto avrebbe sfalsato la riga su tutta l'app.
+
+**① Il pulsante che è anche lo stato** (la richiesta di Tommy: un solo elemento, non chip + bottone).
+`Compile` → `Compiling…` → `Compiled ✓` / `N errors`, e **al passaggio del cursore diventa
+`↻ Recompile`**. Dettagli che contano:
+- **Mentre compila è `disabled`**: niente hover, niente click, cursore normale — "non posso fare
+  nulla" preso alla lettera. Per coerenza anche **⌘S ora ignora** una seconda richiesta mentre una
+  build è in corso (prima ne partivano due in parallelo, l'ultima vinceva).
+- **Le due facce stanno nella stessa cella di un grid** e una è a `opacity:0`: il bottone è largo
+  quanto la più larga e **non salta** quando ci passi sopra (misurato: 103,06px in entrambi gli
+  stati). Un `min-width:112px` tiene ferma anche la larghezza fra uno stato e l'altro, se no la
+  riga di icone accanto ballava di 7px a ogni compilazione.
+- Lo hover offre "Recompile" **solo** da `ok`/`err`: su un progetto mai compilato la scritta resta
+  "Compile" — proporre di *ri*compilare qualcosa che non esiste sarebbe una bugia.
+- `setStatus(kind, text)` ha la stessa firma di prima e ora pilota il bottone: il restore della
+  cronologia ("Restoring…"/"Restored ✓") continua a funzionare senza toccarlo, e per giunta
+  disabilita il pulsante durante il ripristino.
+
+**② History e Download a icona**, la ⏱ subito a sinistra del pulsante di compilazione come chiesto,
+il ⬇ dopo il log come su Overleaf. Stesso tratto SVG del rail; nessuna logica toccata (gli id sono
+gli stessi, i listener pure).
+
+**③ Il log non è più un tab ma un'icona con badge**: rosso col numero di **errori**, ambra col numero
+di **warning** quando errori non ce ne sono, assente se non c'è niente da dire (`parseLatexLog` le
+due categorie le distingueva già dal giro 3, ma contavamo solo gli errori). Lo stesso bottone fa da
+interruttore PDF⇄log: quando il log è a schermo si accende in accento e il tooltip diventa "Back to
+the PDF". Sparito `#tabPdf`.
+
+**④ Pagine e zoom come Overleaf.** Navigazione: chevron su/giù, la pagina corrente in un campo in cui
+si può **scrivere** (Invio ti porta lì, fuori range viene clampato) e `/ N`; l'indicatore segue lo
+scroll (una sola rilettura per frame). Zoom: `−`/`+` a passo **moltiplicativo** (×1.1, così un click
+pesa uguale al 50% e al 400%) più la tendina di Overleaf — Fit to width, Fit to height, 50/75/100/
+150/200/400% — con la spunta sulla voce attiva.
+- **La percentuale cambia significato, di proposito.** Prima "100%" voleva dire "largo quanto il
+  pannello"; ora è la percentuale della **dimensione reale** della pagina (100% = pagina a 96dpi,
+  la convenzione di pdf.js e di Overleaf). È l'unica lettura in cui "Fit to width" e "100%" sono due
+  voci diverse e sensate nello stesso menu. Dentro, `zoom` resta il moltiplicatore su fit-width che
+  serve alla matematica della pinch: la conversione vive in tre funzioni di una riga (`pctOfZoom`,
+  `zoomOfPct`, `clampZoom`), e i limiti sono passati da "×0.1…×5" a "10%…400% reali" perché il 400%
+  con un pannello stretto sfondava il vecchio tetto.
+- Le voci passano dallo stesso `zoomToCenter` dei pulsanti: quello che stavi leggendo resta dov'era.
+
+**⑤ Due casi di bordo chiusi.**
+- **Pannello PDF collassato**: i comandi ci vivono dentro, quindi ⌘S ora **riapre il pannello** prima
+  di compilare (`revealPreview`, gemello di `revealEditor`) — altrimenti premeresti nel vuoto, col
+  risultato e l'eventuale log nascosti dietro una colonna chiusa.
+- **Pannello stretto**: un `ResizeObserver` sull'header toglie prima la navigazione pagine (sotto
+  458px di contenuto) e poi lo zoom (sotto 328px); i comandi della build non spariscono mai — perdere
+  Compile perché hai tirato il divisorio è l'unica cosa a cui non potresti rimediare.
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, `test/smoke.sh` **22/22**)
+- **Stati del pulsante**, tutti visti a schermo: `Compile` su progetto senza PDF, `Compiling…`
+  arancione con spinner e `disabled=true` (mouse fermo sopra: la faccia "Recompile" resta a
+  `opacity:0`), `Compiled ✓` verde, `1 error` corallo. Hover → `Recompile` in accento, larghezza
+  identica al pixel.
+- **Badge**: build con 3 warning → badge **ambra "3"**, tooltip "Compilation log — 3 warnings";
+  `\undefinedcommandhere` → badge **rosso "1"**, log aperto da solo con la riga cliccabile
+  `main.tex:5`, bottone log acceso e tooltip "Back to the PDF"; riclick → torna al PDF, pagine e
+  zoom ricompaiono.
+- **Pagine** su un PDF di 7 pagine: `⌄` → pagina 2 (scrollTop 665 = cima pagina 2 − 8); scritto "6"
+  + Invio → pagina 6 (3293 su 3301); `99`→7, `0`→1, `abc`→1; scroll a mano → l'indicatore passa a
+  5 mentre a schermo si legge il piè di pagina "5"; frecce disabilitate a inizio e fine.
+- **Zoom**: `Fit to height` → pagina renderizzata **427×604** in un pannello alto 636 (604 = altezza
+  utile esatta); `100%` → pagina a dimensione reale con scroll orizzontale; la spunta segue la voce.
+- **Stretto**: a 431px sparisce la navigazione pagine, a 325px anche lo zoom, `scrollWidth ==
+  clientWidth` in entrambi i casi (nessun trabocco).
+- **Collassato**: `›` chiude il pannello (colonna a 0px), ⌘S lo **riapre** e la build parte.
+- **Contorno**: History apre l'overlay col nome giusto, Download prepara `zz-toolbar-test.pdf` dal
+  blob, chiaro e scuro entrambi leggibili, home page non toccata (`.iconbtn` lì non si usa).
+- Le prove vere sono state fatte su un **progetto usa-e-getta** (multipagina, poi rotto apposta per
+  gli errori) **cancellato a fine giro**: il Sample paper di Tommy non è stato toccato — le sue righe
+  di prova sono dov'erano e `updatedAt` non si è mosso. Libreria di nuovo col solo "Sample paper".
+
+**Da sapere, non risolto qui**
+- **Il PDF si renderizza due volte all'apertura**, ed è **pre-esistente** (giro 3): il
+  `ResizeObserver` su `.preview-body` scatta la prima volta mentre il primo render è ancora in corso,
+  alza `pendingRender` e il `do/while` di `renderPdf` rifà tutto da capo. In un browser vero è solo
+  lavoro sprecato; qui l'ho beccato perché nel tab del tool congelato la seconda passata restava
+  appesa. Si chiude con due righe, ma è un'altra cosa dal punto ④.
+- **Il badge non si ripopola dalla cache**: riaprendo un progetto si rivede il PDF salvato ma non i
+  suoi warning, perché la build in cache porta il PDF, non il log. Era già così coi tab.
+- Nota di metodo per il prossimo giro col browser di prova: se il pannello del browser è nascosto il
+  tab è `visibilityState:"hidden"` e **rAF non scatta** → PDF.js resta appeso a metà `page.render()`
+  e con lui tutta la catena `loadCachedBuild → loadPdf`. Non è un bug dell'app: uno screenshot (che
+  forza un frame) la sblocca. Terza incarnazione della stessa trappola (giro 5, giro 6, questa).
+
+⚠️ **Non è live**: file statici, ma serve comunque il pull+rebuild sul VPS (Albi) — che resta fermo
+a `1541753`, quindi gli mancano ancora i giri 8, 9 e 10.
+
+---
+
 ## 2026-08-02 (bis) — Giro 9: ⚙ nel rail, i temi editor di Overleaf, icone ricentrate ⏳ (in attesa del check di Tommy)
 
 Tommy ha messo quattro punti con screenshot alla mano. I primi tre sono piccoli e indipendenti
