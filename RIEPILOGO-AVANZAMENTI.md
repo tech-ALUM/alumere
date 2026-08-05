@@ -7,12 +7,13 @@
 
 ---
 
-## 2026-08-05 (bis) — Giro 11: il cestino, e l'eliminazione definitiva diventa a due stadi ⏳ (in attesa del check di Tommy)
+## 2026-08-05 (bis) — Giro 11: il cestino, e l'eliminazione definitiva diventa a due stadi ✅ (check di Tommy OK)
 
 Il primo dei due punti rimasti in lista dal 18 luglio (l'altro è **tag in massa**). Fino a ieri
 `DELETE /api/projects/:id` faceva `rm -rf` della cartella dietro un `confirm()` nativo: **un click e
 un progetto spariva per tutti**, senza rete. Ora la cancellazione è in due tempi, e il colpo
-irreversibile è l'unico che non si può dare per sbaglio. **Niente commit**: aspetta il suo check.
+irreversibile è l'unico che non si può dare per sbaglio. Dopo il check di Tommy è stato
+**committato e pushato** (`67cd94c` + `7a61f90`).
 
 **Le due decisioni di Tommy**, prese prima di scrivere una riga: il cestino **non si svuota da solo**
 (niente scadenza a 30 giorni: nessuna perdita di dati a sorpresa e nessun job periodico da
@@ -250,11 +251,12 @@ a `1541753`, quindi gli mancano ancora i giri 8, 9 e 10.
 
 ---
 
-## 2026-08-02 (bis) — Giro 9: ⚙ nel rail, i temi editor di Overleaf, icone ricentrate ⏳ (in attesa del check di Tommy)
+## 2026-08-02 (bis) — Giro 9: ⚙ nel rail, i temi editor di Overleaf, icone ricentrate ✅ (check di Tommy OK)
 
 Tommy ha messo quattro punti con screenshot alla mano. I primi tre sono piccoli e indipendenti
 e stanno qui; **il quarto** (allineare la barra strumenti al modello Overleaf, log compreso) è
-una ristrutturazione a parte — vedi in fondo. **Niente commit**: aspetta il suo check.
+una ristrutturazione a parte — vedi in fondo. Dopo il check di Tommy è stato **committato e
+pushato** (`ec981b3` + `aadcee2`).
 
 **① La ⚙ scende nel rail, in fondo.** Era nella toolbar in alto; ora vive col resto dei
 pannelli, come su Overleaf. Il rail passa da `<nav class="rail">` a `<div class="rail">` che
@@ -336,9 +338,10 @@ ancora fermo a `1541753`, quindi gli manca anche tutto il giro 8.
 
 ---
 
-## 2026-08-02 — Giro 8: salta-al-collega, preview senza scritta, PDF già pronto all'apertura, nomi progetto unici ⏳ (in attesa del check di Tommy)
+## 2026-08-02 — Giro 8: salta-al-collega, preview senza scritta, PDF già pronto all'apertura, nomi progetto unici ✅ (check di Tommy OK)
 
-Quattro richieste di Tommy in un colpo solo. **Niente commit**: aspetta il suo check.
+Quattro richieste di Tommy in un colpo solo. Dopo il suo check è stato **committato e pushato**
+(`f02aea0` + `6f2db8f`).
 
 **① Click sull'avatar di un collega → si salta dove sta lui.** L'avatar nella toolbar era solo
 informativo; ora quello **degli altri** (non il proprio) è un teletrasporto: apre il suo file e ci
@@ -459,10 +462,11 @@ autenticato del dominio consentito; impatto solo disponibilità. Il terzo uso
   strip della top-folder, sottocartella annidata, binario, filtro `__MACOSX`/`.DS_Store`,
   round-trip del download con CRC), tutti verdi. **Vale la pena versionarlo** in `test/`.
 
-## 2026-07-21 — Giro 7: header del tree alla Overleaf + upload (popup e drag&drop) + collasso via rail ⏳ (in attesa del check di Tommy)
+## 2026-07-21 — Giro 7: header del tree alla Overleaf + upload (popup e drag&drop) + collasso via rail ✅ (check di Tommy OK)
 
 Quattro richieste di Tommy (con screenshot di Overleaf come riferimento), lavorate in autonomia
-con suo consenso esplicito per i comandi della sessione. **Niente commit**: aspetta il suo check.
+con suo consenso esplicito per i comandi della sessione. Dopo il suo check è stato **committato e
+pushato** (`765b90c` + `1541753`).
 
 **① Titoli dei pannelli in minuscolo** — via il `text-transform: uppercase` da `.pane-head`
 (`styles.css`): ora "File tree" (rinominato da "Project"), "Review", "Chat", "Editor", "Preview"
@@ -557,7 +561,7 @@ intatte. Nessun rebuild del bundle CM6.
 
 ---
 
-## 2026-07-20 — Giro 6: collasso pannelli + spell-check IT/EN + popup autocomplete leggibile ✅ (in attesa del check di Tommy)
+## 2026-07-20 — Giro 6: collasso pannelli + spell-check IT/EN + popup autocomplete leggibile ✅ (check di Tommy OK)
 
 Tre richieste di Tommy (con screenshot): **① frecce per chiudere editor o PDF** sul divisorio
 (alla Overleaf), **② spell-check** con sottolineatura a puntini rossi, suggerimenti al tasto
@@ -654,12 +658,13 @@ CDN a runtime, il Dockerfile li copia e basta. **Nessun rebuild del bundle CM6.*
 add; si può editare `dictionary.json` a progetto chiuso), scelta della lingua per progetto
 (oggi IT+EN sempre attivi insieme), spell nei commenti/chat.
 
-**Processo**: implementato e verificato, **niente commit** — aspetto il check di Tommy.
+**Processo**: implementato e verificato; dopo il check di Tommy, **committato e pushato**
+(`1d8a723` + `6329c8e`).
 ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
 
 ---
 
-## 2026-07-18 (novies) — Parità Overleaf, giro 5/5: Review panel + Chat ✅ (in attesa del check di Tommy)
+## 2026-07-18 (novies) — Parità Overleaf, giro 5/5: Review panel + Chat ✅ (check di Tommy OK)
 
 Quinto e ultimo giro dell'arco "parità Overleaf", sul disegno chiesto da Tommy (screenshot Overleaf):
 **rail di icone** a sinistra con 3 pulsanti — **Files / Review / Chat** — che **scambiano** il contenuto
@@ -722,8 +727,9 @@ avatar, "Sconosciuto" → "Unknown", "Torna ai progetti" → "Back to projects".
   i click sui `ref_N` invece riportano CSS px. (E un rAF **non scatta** finché il tab non renderizza
   un frame: è così che si è palesato il bug del popover.)
 
-**Processo**: regola nuova rispettata — implementato e verificato, **niente commit**: aspetto il
-check di Tommy. ⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
+**Processo**: regola nuova rispettata — implementato e verificato; dopo il check di Tommy,
+**committato e pushato** (`7d92808` + `da5336e`).
+⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi).
 
 **L'arco "parità Overleaf" (5 giri) è completo.** Prossimo: quello che Tommy decide — in lista
 restano sicurezza giro 2 (allowlist/ACL), template (Step G), tag in massa, cestino.
