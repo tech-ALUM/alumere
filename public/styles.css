@@ -451,17 +451,22 @@ body[data-conn="offline"] .offline-bar { display: flex; }
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 
-/* Zoom controls, shown only over the PDF tab. The percentage is of the page's REAL size
-   (Overleaf's meaning), so "Fit to width" and "100%" are genuinely different things. */
+/* Zoom controls, shown only over the PDF tab. The percentage is of the WHOLE PAGE: 100% =
+   one page entirely in view (giro 13). The label and the caret are two buttons
+   welded into one pill — square off the inner corners and drop one of the two borders, so
+   the seam is a single hairline and the pair still reads as the one control it looks like. */
 .zoombar { display: flex; align-items: center; gap: 4px; }
-.zoomlabel {
-  display: flex; align-items: center; justify-content: center; gap: 2px;
-  height: 24px; min-width: 58px; padding: 0 6px; flex: 0 0 auto;
+.zoom-menu { display: flex; align-items: center; }
+.zoomlabel, .zoomcaret {
+  display: flex; align-items: center; justify-content: center;
+  height: 24px; flex: 0 0 auto;
   font: 600 11px/1 var(--ui-font); font-variant-numeric: tabular-nums;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
 }
-.zoomlabel:hover { background: var(--accent-soft); color: var(--accent-d); }
-.zoomlabel .caret { font-size: 9px; opacity: .8; }
+.zoomlabel { min-width: 46px; padding: 0 6px; border-radius: 6px 0 0 6px; border-right: 0; }
+.zoomcaret { width: 18px; padding: 0; border-radius: 0 6px 6px 0; }
+.zoomlabel:hover, .zoomcaret:hover { background: var(--accent-soft); color: var(--accent-d); }
+.zoomcaret .caret { font-size: 9px; opacity: .8; }
 .zoom-pop { min-width: 152px; padding: 5px; gap: 0; }
 .zoom-item {
   display: block; width: 100%; text-align: left; padding: 6px 10px;

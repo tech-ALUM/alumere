@@ -52,6 +52,13 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
         </button>
       </nav>
 
+      <!-- History (giro 13): it left the PDF toolbar for the rail, under the chat. Like ⚙ it
+           opens an OVERLAY, not a side panel — so it lives outside the <nav> and never takes
+           the .active state, which here means "this panel is the one in the left column". -->
+      <button id="history" class="rail-btn" type="button" title="Project version history">
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.3 2.3v3.7h3.7"/><path d="M2.3 9.8a6.7 6.7 0 1 0 2.2-5.8L2.3 6"/><path d="M9 5.3V9l3 1.5"/></svg>
+      </button>
+
       <div class="menu rail-menu" id="settingsMenu">
         <button id="settingsBtn" class="rail-btn" type="button" aria-haspopup="true"
                 title="Settings — LaTeX engine, editor theme, appearance">
@@ -171,9 +178,6 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
            the pane now, and the header has no room to spare. -->
       <div class="pane-head pdf-toolbar" id="pdfToolbar">
         <div class="pdftb-group">
-          <button id="history" class="iconbtn" title="Project version history">
-            <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.3 2.3v3.7h3.7"/><path d="M2.3 9.8a6.7 6.7 0 1 0 2.2-5.8L2.3 6"/><path d="M9 5.3V9l3 1.5"/></svg>
-          </button>
           <!-- One button, two faces: it REPORTS (Compile / Compiling… / Compiled ✓ /
                N errors) until you point at it, then it OFFERS (Recompile). Busy = disabled,
                so there's nothing to point at. Both faces are always in the DOM, stacked in
@@ -215,9 +219,16 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
             <button id="zoomIn" class="iconbtn" title="Zoom in">
               <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9h10M9 4v10"/></svg>
             </button>
+            <!-- One pill, two hit areas (giro 13): the NUMBER snaps back to 100% — the whole
+                 page — and only the caret opens the presets. Hovering lights just the half
+                 you're on, which is what tells the two apart. -->
             <div class="menu zoom-menu" id="zoomMenu">
-              <button id="zoomBtn" class="zoomlabel" type="button" aria-haspopup="true" title="Zoom level">
-                <span id="pdfZoomLabel">100%</span><span class="caret">▾</span>
+              <button id="zoomBtn" class="zoomlabel" type="button" title="Back to 100% — the whole page">
+                <span id="pdfZoomLabel">100%</span>
+              </button>
+              <button id="zoomCaret" class="zoomcaret" type="button" aria-haspopup="true"
+                      aria-expanded="false" title="Zoom level">
+                <span class="caret">▾</span>
               </button>
               <div class="menu-pop zoom-pop" hidden>
                 <button class="zoom-item" type="button" data-zoom="width">Fit to width</button>

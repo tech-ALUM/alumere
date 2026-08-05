@@ -981,21 +981,39 @@ function showTab(which) {
 // cursor; the canvases re-render crisply (at devicePixelRatio) once the gesture settles,
 // with a CSS transform on the pages layer giving instant feedback in between.
 let pdfjsLib = null, pdfDoc = null, pdfPageList = [];
-let fitScale = 1;            // PDF.js scale at which page 1 fills the pane width (= 100%)
+let fitScale = 1;            // PDF.js scale at which page 1 fills the pane width (= zoom 1)
 let zoom = 1;               // user multiplier over fit-width (continuous)
 let renderedZoom = 1;        // the zoom the current canvases were rasterised at
+let renderedFit = 0;         // …and the fit-width scale they were rasterised at
 let naturalW = 0, naturalH = 0;   // untransformed size of the pages layer, in px
 let renderTimer = null, rendering = false, pendingRender = false;
 // Two different scales meet here. Internally `zoom` is a multiplier over fit-width (1 = the
 // page exactly fills the pane), because that's what the pinch/resize maths wants. What the
-// toolbar SHOWS is Overleaf's number: a percentage of the page's real size, where 100% is
-// the page at 96dpi — that's the only reading in which "Fit to width" and "100%" are two
-// different things worth having in the same menu. CSS_UNITS is the bridge (pdf.js's own).
-const CSS_UNITS = 96 / 72;
+// toolbar SHOWS is a percentage of the WHOLE PAGE: 100% = one page entirely in view, which
+// is also what a PDF opens at. Giro 13 moved the basis here from Overleaf's one (the page's
+// real size at 96dpi): that reading made the opening view read an arbitrary 95% — a number
+// nobody chose, different on every screen. "How big am I next to the whole page" is the
+// reading in which the default view is 100%, and it's what makes the label worth clicking.
 const PCT_MIN = 10, PCT_MAX = 400;
-const pctOfZoom = (z) => (fitScale * z * 100) / CSS_UNITS;
-const zoomOfPct = (p) => ((p / 100) * CSS_UNITS) / fitScale;
+const pctOfZoom = (z) => (z / fitPageZoom()) * 100;
+const zoomOfPct = (p) => (p / 100) * fitPageZoom();
 const clampZoom = (z) => Math.max(zoomOfPct(PCT_MIN), Math.min(zoomOfPct(PCT_MAX), z));
+
+// Which preset the view is parked on, if any — a fit is a MODE, not a one-shot. Without
+// this the label would drift off 100% the moment the splitter moves (a fit is measured
+// against the pane), and every compile would either throw away a zoom the reader had chosen
+// or never land on the fit at all. null = an explicit zoom (pinch, ±, a percentage): that's
+// a choice, and it survives resizes and recompiles untouched.
+let fitMode = "page";
+
+// Re-apply the parked fit to the pane as it is now. Returns whether `zoom` actually moved.
+function applyFitMode() {
+  if (!fitMode || !pdfPageList.length) return false;
+  const next = clampZoom(fitMode === "page" ? fitPageZoom() : fitMode === "height" ? fitHeightZoom() : 1);
+  if (Math.abs(next - zoom) < 1e-4) return false;
+  zoom = next;
+  return true;
+}
 
 async function ensurePdfjs() {
   if (pdfjsLib) return pdfjsLib;
@@ -1016,6 +1034,7 @@ async function loadPdf(base64) {
   pageCount = doc.numPages;
   $("pageTotal").textContent = pageCount;
   computeFitScale();
+  applyFitMode();          // a fresh build lands on the whole page — unless you'd picked a zoom
   await renderPdf();
   updatePageIndicator();
 }
@@ -1064,6 +1083,7 @@ async function renderPdf() {
       pagesEl.style.transform = "";
       pagesEl.replaceChildren(...canvases);
       renderedZoom = zoom;
+      renderedFit = fitScale;
       naturalW = pagesEl.offsetWidth;
       naturalH = pagesEl.offsetHeight;
       pdfSizer.style.width = naturalW + "px";
@@ -1081,10 +1101,18 @@ function scheduleRender() {
   renderTimer = setTimeout(() => { renderTimer = null; renderPdf(); }, 120);
 }
 
-// Instant, cheap feedback during a gesture: CSS-scale the already-rendered canvases by the
-// ratio to their rasterised zoom, and size the sizer to match so the scrollbars stay honest.
+// How far the rendered canvases are from what the view wants right now — the factor they're
+// CSS-scaled by until the next rasterise catches up. BOTH halves of the scale matter: the
+// canvases carry renderedFit × renderedZoom, and a pane resize moves `fitScale` under a
+// `zoom` that never changed. Reading the zoom ratio alone was right only as long as nothing
+// re-fitted on resize; with a parked fit doing exactly that, it scaled the page the wrong
+// way — a narrowed pane grew the page by 10% instead of shrinking it by a quarter.
+const liveScale = () => (renderedFit * renderedZoom) ? (fitScale * zoom) / (renderedFit * renderedZoom) : 1;
+
+// Instant, cheap feedback during a gesture: CSS-scale the already-rendered canvases to that
+// factor, and size the sizer to match so the scrollbars stay honest.
 function applyTransform() {
-  const k = renderedZoom ? zoom / renderedZoom : 1;
+  const k = liveScale();
   pagesEl.style.transform = Math.abs(k - 1) < 1e-4 ? "" : `scale(${k})`;
   pdfSizer.style.width = (naturalW * k) + "px";
   pdfSizer.style.height = (naturalH * k) + "px";
@@ -1099,25 +1127,44 @@ function updateZoomLabel() {
   if (!lbl) return;
   const pct = pctOfZoom(zoom);
   lbl.textContent = Math.round(pct) + "%";
-  const fitH = fitHeightZoom();
+  const atWidth = Math.abs(zoom - 1) < 0.005, atHeight = Math.abs(zoom - fitHeightZoom()) < 0.005;
   for (const item of document.querySelectorAll(".zoom-item")) {
     const v = item.dataset.zoom;
-    const on = v === "width" ? Math.abs(zoom - 1) < 0.005
-      : v === "height" ? Math.abs(zoom - fitH) < 0.005
-      : Math.abs(pct - Number(v) * 100) < 0.5;
+    // The fits win the tick: "Fit to height" IS the 100% entry now, and two ticks in one
+    // menu read as a bug. Of the two, the named one says more.
+    const on = v === "width" ? atWidth
+      : v === "height" ? atHeight
+      : !atWidth && !atHeight && Math.abs(pct - Number(v) * 100) < 0.5;
     if (on) item.setAttribute("aria-current", "true");
     else item.removeAttribute("aria-current");
   }
 }
 
 // Fit-to-height, expressed in our own units: the multiplier at which one whole page fits
-// the pane's height. Falls back to the current zoom while the pane has no layout yet.
+// the pane's height. Falls back to the current zoom while the pane has no layout yet —
+// including when it has a height but NO WIDTH (a collapsed pane, a hidden tab, the first
+// frames of a load): `fitScale` is stale there, computeFitScale having refused to touch it,
+// and dividing by it would answer with a number four times off. It is also the basis of the
+// toolbar percentage now, so a wrong answer here doesn't just misplace the page — it gets
+// baked into `zoom` by applyFitMode and the label reports 100% while showing a thumbnail.
 function fitHeightZoom() {
-  if (!pdfPageList.length) return zoom;
+  if (!pdfPageList.length || !previewBody.clientWidth) return zoom;
   const h = previewBody.clientHeight;
   if (!h) return zoom;
   const vp = pdfPageList[0].getViewport({ scale: 1 });
   return Math.max(120, h - 32) / vp.height / fitScale;   // minus .pdf-pages' padding
+}
+
+// The whole page in view — the meaning of 100%, and what the viewer opens at. Fitting the
+// HEIGHT is the obvious reading of that, and on a normal pane it's the one that binds. But
+// drag the divider until the pane is narrow and taller-than-A4: there fitting the height
+// pushes the page wider than the pane, and a default view you have to scroll sideways to
+// read is not a default view. So: the smaller of the two fits, which is what every PDF
+// reader means by "fit page". (zoom = 1 IS fit-width in our units.) The menu's "Fit to
+// height" stays literal — pick it there and you get it, scrollbar and all.
+function fitPageZoom() {
+  if (!pdfPageList.length || !previewBody.clientWidth || !previewBody.clientHeight) return zoom;
+  return Math.min(fitHeightZoom(), 1);
 }
 
 // ---------- Page navigation ----------
@@ -1128,7 +1175,7 @@ function fitHeightZoom() {
 let pageCount = 0, pageTick = false;
 function updatePageIndicator() {
   if (!pdfDoc || !pagesEl.children.length) return;
-  const k = renderedZoom ? zoom / renderedZoom : 1;
+  const k = liveScale();
   const probe = pdfScroll.scrollTop + pdfScroll.clientHeight * 0.35;
   let p = 1;
   for (let i = 0; i < pagesEl.children.length; i++) {
@@ -1151,7 +1198,7 @@ function goToPage(p) {
   p = Math.max(1, Math.min(pageCount, Math.trunc(p) || 1));
   const el = pagesEl.children[p - 1];
   if (!el) return;
-  const k = renderedZoom ? zoom / renderedZoom : 1;
+  const k = liveScale();
   pdfScroll.scrollTop = Math.max(0, el.offsetTop * k - 8);
   setPageIndicator(p);
 }
@@ -1162,12 +1209,12 @@ function zoomAround(target, clientX, clientY) {
   const next = clampZoom(target);
   if (Math.abs(next - zoom) < 1e-4) return;
   const before = pagesEl.getBoundingClientRect();
-  const kOld = renderedZoom ? zoom / renderedZoom : 1;
+  const kOld = liveScale();
   const cx = (clientX - before.left) / kOld;                   // the point, in natural px
   const cy = (clientY - before.top) / kOld;
   zoom = next;
   applyTransform();
-  const kNew = renderedZoom ? zoom / renderedZoom : 1;
+  const kNew = liveScale();
   const after = pagesEl.getBoundingClientRect();
   pdfScroll.scrollLeft += after.left - (clientX - cx * kNew);
   pdfScroll.scrollTop += after.top - (clientY - cy * kNew);
@@ -1181,19 +1228,29 @@ function zoomToCenter(target) {
 function setupZoom() {
   if (!$("pdfZoomBar")) return;
   // Steps are multiplicative, so one click feels the same at 50% as at 400% (a fixed
-  // step of the multiplier would crawl once you're zoomed in).
-  $("zoomOut").addEventListener("click", () => zoomToCenter(zoom / 1.1));
-  $("zoomIn").addEventListener("click", () => zoomToCenter(zoom * 1.1));
+  // step of the multiplier would crawl once you're zoomed in). Anything the user aims by
+  // hand leaves the fit behind: from here on the zoom is theirs, not the pane's.
+  $("zoomOut").addEventListener("click", () => { fitMode = null; zoomToCenter(zoom / 1.1); });
+  $("zoomIn").addEventListener("click", () => { fitMode = null; zoomToCenter(zoom * 1.1); });
   // Presets, Overleaf's list. Fit-to-width is our native zoom = 1. They go through the same
   // zoom-around-the-centre path as the buttons, so what you were reading stays where it was.
-  const menu = $("zoomMenu"), pop = menu.querySelector(".menu-pop");
-  $("zoomBtn").addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; });
-  document.addEventListener("click", (e) => { if (!pop.hidden && !menu.contains(e.target)) pop.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) pop.hidden = true; });
+  const menu = $("zoomMenu"), pop = menu.querySelector(".menu-pop"), caret = $("zoomCaret");
+  const closePop = () => { pop.hidden = true; caret.setAttribute("aria-expanded", "false"); };
+  caret.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    caret.setAttribute("aria-expanded", String(!pop.hidden));
+  });
+  // The number itself is the way back: one click and you're at 100%, the whole page. It
+  // closes the menu by hand — the outside-click handler below counts it as inside.
+  $("zoomBtn").addEventListener("click", () => { closePop(); fitMode = "page"; zoomToCenter(fitPageZoom()); });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !menu.contains(e.target)) closePop(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) closePop(); });
   for (const item of pop.querySelectorAll(".zoom-item")) {
     item.addEventListener("click", () => {
-      pop.hidden = true;
+      closePop();
       const v = item.dataset.zoom;
+      fitMode = v === "width" || v === "height" ? v : null;   // a fit sticks, a percentage doesn't
       zoomToCenter(v === "width" ? 1 : v === "height" ? fitHeightZoom() : zoomOfPct(Number(v) * 100));
     });
   }
@@ -1202,6 +1259,7 @@ function setupZoom() {
   pdfScroll.addEventListener("wheel", (e) => {
     if (!(e.ctrlKey || e.metaKey) || !pdfDoc) return;
     e.preventDefault();
+    fitMode = null;
     zoomAround(zoom * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
   }, { passive: false });
   // Page navigation. The number is a plain input: type 12, press Enter, land on page 12.
@@ -1219,7 +1277,9 @@ function setupZoom() {
     pageTick = true;
     requestAnimationFrame(() => { pageTick = false; updatePageIndicator(); });
   }, { passive: true });
-  // Keep "zoom 1 = fit width" as the pane is resized (splitter drag / window resize).
+  // Keep "zoom 1 = fit width" as the pane is resized (splitter drag / window resize), and
+  // keep a parked fit ON the pane it's fitting: fit-height is measured against the pane's
+  // height, so without the re-fit a splitter drag would quietly leave you at 103%.
   if (window.ResizeObserver) {
     let rt = null;
     new ResizeObserver(() => {
@@ -1228,6 +1288,9 @@ function setupZoom() {
       rt = setTimeout(() => {
         const prevFit = fitScale;
         computeFitScale();
+        // Before the skip below: a re-fit is exactly the case where the height changed and
+        // the width didn't, which is the case that skip was written to throw away.
+        if (applyFitMode()) applyTransform();                  // instant feedback, then redraw
         // Re-rasterise only if the pixels would actually differ: same fit width AND the
         // canvases already carry the current zoom means there is nothing to redraw. This
         // is what made every freshly opened PDF render TWICE — a ResizeObserver delivers
@@ -1241,12 +1304,14 @@ function setupZoom() {
       }, 150);
     }).observe(previewBody);
     // A pane dragged narrow sheds the view controls rather than overflowing its header.
-    // Thresholds are the measured content widths: everything needs ~454px, and once the
-    // page navigation is gone what's left needs ~324px (contentRect excludes the padding).
+    // Thresholds are the measured content widths: everything needs ~415px, and once the
+    // page navigation is gone what's left needs ~300px (contentRect excludes the padding).
+    // Both dropped by ~32px in giro 13, when History left this toolbar for the rail — a
+    // threshold measured around a button that isn't there any more sheds controls early.
     new ResizeObserver(([e]) => {
       const w = e.contentRect.width, tb = $("pdfToolbar");
-      tb.toggleAttribute("data-tight", w < 458);
-      tb.toggleAttribute("data-tighter", w < 328);
+      tb.toggleAttribute("data-tight", w < 419);
+      tb.toggleAttribute("data-tighter", w < 304);
     }).observe($("pdfToolbar"));
   }
 }
