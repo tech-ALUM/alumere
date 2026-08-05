@@ -7,6 +7,85 @@
 
 ---
 
+## 2026-08-05 (quater) — Giro 13: la history nel rail, il 100% che vuol dire qualcosa ✅ (check di Tommy OK)
+
+**Il primo giro nato da una lista di idee di Tommy, non dalla lista del 18 luglio** (quella è chiusa dal
+giro 12). Cinque punti; questo giro ne fa **tre**, i due grossi restano fuori di proposito: il **salto
+automatico al cursore dopo la compilazione** (giro suo — la macchina SyncTeX c'è già tutta, `syncForward()`
+è la freccina ➜ sul divisorio, il lavoro è chiamarla da sola e decidere i casi di bordo) e l'**outline delle
+sezioni** stile Overleaf (parser + pannello sotto l'albero: un giro intero).
+
+**① Il 🕘 lascia la toolbar del PDF per il rail**, sotto la chat. Apre un **overlay**, non un pannello
+laterale: quindi come il ⚙ del giro 9 sta **fuori dal `<nav>`** e non prende mai `.active`, che lì dentro
+vuol dire «questo pannello è nella colonna». Il precedente esisteva già, l'ho solo ricalcato. Niente
+doppioni: dalla toolbar sparisce.
+- **Le due soglie del pannello stretto scendono di ~32px** (458→419, 328→304). Erano *misurate* attorno a
+  un bottone che adesso non c'è più: lasciarle lì avrebbe sfoltito i controlli prima del necessario.
+
+**② Il 95% che dava fastidio a Tommy non era un difetto: era il denominatore.** La percentuale voleva dire
+«la pagina alla sua dimensione reale a 96dpi» — la lettura di Overleaf. Il 95% era il numero onesto per la
+sua finestra, e su un altro schermo sarebbe stato 87% o 112%: nessuno l'aveva scelto. Ora la base è la
+**pagina intera in vista**, che è anche la vista di apertura → **si apre a 100%**.
+- **Decisione di Tommy**, presa prima di scrivere: sì al cambio di base, e **apertura a fit-to-height**
+  («più leggibile a livello iniziale»).
+- **Una deviazione dalla richiesta letterale, dichiarata prima del check**: 100% è il **minore fra
+  fit-height e fit-width**, non fit-height alla lettera. Sul suo schermo largo vincola comunque fit-height,
+  quindi vede esattamente quel che ha chiesto; ma a pannello stretto e più alto di un A4 il fit-height
+  letterale spinge la pagina **fuori in larghezza**, e una vista di default da scorrere di lato non è una
+  vista di default. La voce **«Fit to height» del menù resta letterale**: la scegli e la ottieni, barra
+  compresa (116% misurato).
+- **Un fit diventa una modalità, non un colpo singolo.** Senza, bastava trascinare il divisorio e
+  l'etichetta scivolava a 103% — proprio la cosa che dava fastidio. Ed è ciò che rende vero «di default a
+  ogni compilazione»: **ricompili e torni alla pagina intera, a meno che tu non abbia scelto uno zoom tuo**,
+  che allora sopravvive. Le due letture della richiesta si risolvono da sole così.
+- **Spunta esclusiva nel menù**: a pagina intera si accende il fit che vincola e **non anche «100%»** — che
+  ormai è lo stesso punto, e due spunte in un menù sembrano un difetto.
+
+**③ Numero e freccetta, due bottoni saldati in una pastiglia sola.** Il numero riporta a 100%, solo la
+freccetta apre i preset; l'hover accende metà pastiglia, ed è quello a insegnare la differenza. Il numero
+chiude il menù da sé, perché per il gestore del click-fuori è "dentro".
+
+**Tre difetti trovati per strada, due miei**
+- `fitHeightZoom()` misurata **prima che il pannello avesse una larghezza** (`fitScale` ancora stantio):
+  prima non contava, adesso è la base della percentuale e finiva **dentro `zoom`** → pagina grande **un
+  quarto** con l'etichetta che diceva serenamente 100%. Guardia come quella che `computeFitScale` aveva già.
+- L'anteprima istantanea calcolava la scala dal **solo rapporto degli zoom**: giusto finché nessuno
+  rifittava, ma un resize sposta anche `fitScale` → **ingrandiva del 10% una pagina che doveva rimpicciolire
+  di un quarto**. Ora `liveScale()` tiene conto di entrambe le metà (`renderedFit × renderedZoom`).
+- **Preesistente, segnalato da Tommy al check**: la pagina si poteva **trascinare di lato anche quando era
+  più piccola del pannello**. `.pdf-sizer` non ha mai misurato il contenuto — lo prendeva da `.pdf-pages`,
+  che è un blocco *dentro* di lui, quindi il suo `offsetWidth` **è** la larghezza del contenitore: un valore
+  che si moltiplicava addosso a ogni zoom partendo da quella del pannello. Corretto misurando la tela più
+  larga più il padding. Cade anche una cosa che nessuno aveva notato: `.pdf-sizer { margin: 0 auto }`
+  esisteva dal giorno uno col commento «centra la pagina quando è più stretta del pannello» ed **era codice
+  morto**, perché il contenitore riempiva sempre il pannello.
+
+**Coda, dal check di Tommy**
+- **Il «Restore» disabilitato della history era illeggibile.** La regola toglieva lo sfondo accento ma
+  teneva il **colore di testo scritto per quello sfondo**, al 45% di opacità: su pannello scuro spariva.
+  Testo muto, bordo neutro, 85% — leggibile nei due temi, e lontanissimo dal primario blu di quando è attivo.
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh` **31/31** — niente
+di nuovo lato server, quindi nessun check aggiunto)
+- Apertura e ricompilazione **a 100% con la pagina intera**, senza traboccamenti; a **347px** idem, con la
+  toolbar che sfoltisce (`data-tight`) e non sfora.
+- **Lo zoom esplicito sopravvive alla ricompilazione**: a 150% si ricompila e resta 150%; a 100% resta 100%.
+- Menù: **«Fit to height» letterale** (116% + barra orizzontale), spunta esclusiva, Esc, click fuori, e il
+  numero che chiude *e* riporta a 100% anche col menù aperto.
+- Contenitore: giro **100% → 200% → 100%** e torna a **638 = 606+32** esatti, centrato
+  (`margin:auto` = 30px per lato), zero scorrimento orizzontale.
+- **Nota di metodo, di nuovo decisiva.** Tre volte stavo per attribuirmi (o negare) roba a occhio, e tre
+  volte l'ha stabilito una misura A/B col codice originale rimesso: il traboccamento della pagina **era
+  preesistente** (originale a 67%: contenitore **564** contro contenuto **582**; dopo: **533 = 533**), e la
+  geometria a parità di finestra è **identica al pixel** — cambia solo il numero (56% → 100%). Terza:
+  il render che sembrava incastrato **non lo era**, PDF.js disegna dentro `requestAnimationFrame` e nel
+  browser incorporato il frame non arriva finché non forzo uno screenshot. Senza quella verifica avrei
+  «corretto» un blocco che non esisteva.
+- **Quello che non ho potuto provare qui e ha provato Tommy**: il **trascinamento del divisorio** (stesso
+  motivo, il resize non si assesta senza frame). Suo verdetto: «funziona bene».
+
+---
+
 ## 2026-08-05 (ter) — Giro 12: selezione multipla e azioni in massa, alla Overleaf ✅ (check di Tommy OK)
 
 **L'ultimo punto rimasto in lista dal 18 luglio.** Il cestino era caduto stamattina; questo era l'altro,
