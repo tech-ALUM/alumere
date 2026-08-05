@@ -7,6 +7,83 @@
 
 ---
 
+## 2026-08-05 (sexies) — Giro 15: l'outline delle sezioni, sotto l'albero ✅ (check di Tommy OK)
+
+**Punto 5, l'ultimo della lista di Tommy.** Sotto il file tree, alla base della stessa colonna: un
+maniglione da trascinare, una testata `▾ File outline` che richiude tutto in una striscia, e le righe —
+una per titolo, rientrate come nel documento. Un click porta il cursore lì; la sezione in cui il cursore
+si trova resta evidenziata e, se è fuori vista, il pannello si sposta da solo per mostrarla.
+
+**Il parser non compila niente**: legge il sorgente e basta, con i commenti azzerati prima della scansione
+(sostituiti da spazi, così ogni indice — e quindi ogni numero di riga — resta dov'era). Riconosce i sette
+comandi da `\part` a `\subparagraph`, la variante stellata, il titolo breve fra parentesi quadre
+(`\section[breve]{lungo}` → mostra il lungo), le graffe annidate nel titolo, e ripulisce il markup tenendo
+le parole: `\textbf{Bold}` → *Bold*, `\label{…}` sparisce intero, `\%` torna a essere `%`, `\LaTeX` si
+scrive per esteso invece di svanire.
+
+**Le decisioni prese scrivendolo**
+- **Legge il file APERTO, non il progetto** — la lettura di Overleaf. È anche l'unica in cui
+  «dove sono» vuol dire qualcosa: l'evidenziazione segue un cursore, e il cursore sta in un file solo.
+  *Conseguenza da guardare in faccia, vista la lezione del giro 14*: in un documento spezzato in file
+  inclusi, con `main.tex` davanti l'outline dice «nessuna sezione», perché lì dentro davvero non ce ne
+  sono — stanno nei file `\input`-ati, e l'outline appare aprendo quelli. È il comportamento di Overleaf;
+  se preferisci un outline **di progetto**, che segua gli `\input` e attraversi i file, è un altro
+  disegno (e un altro giro): dimmelo.
+- **Il rientro si misura sul file, non sulla scala di LaTeX.** Un file fatto di soli `\subsection` è un
+  elenco piatto, non un elenco spinto tre passi a destra. Quindi la profondità esce da una pila di
+  antenati aperti — la forma che ha il documento, non quella che avrebbe nel manuale.
+- **Mentre digiti, una graffa non ancora chiusa non produce nessuna riga.** Provato dal vivo: scritto
+  `\subsection{Typed live` l'outline non si muove, alla `}` la riga compare. L'alternativa — prendere
+  tutto quel che segue come titolo — avrebbe fatto lampeggiare mezzo documento dentro il pannello a ogni
+  sezione nuova.
+- **Il click parcheggia il titolo in cima alla vista** (`y: "start"`), non lo fa entrare di stretta misura
+  dal bordo basso: da una mappa ti aspetti di atterrare **sulla** sezione, col suo testo sotto.
+- **Altezza e stato richiuso si ricordano** (`localStorage`, come i tab e il tema).
+
+**Il difetto trovato misurando, e che cambia una riga di disegno.** La prima versione, quando il limite
+massimo scattava, **riscriveva** l'altezza voluta: una finestra stretta per un attimo si portava via la
+scelta per sempre — riallargando, l'outline restava schiacciato. Ora `outlineH` è **la richiesta**, il
+limite si applica solo sulla strada verso il DOM e non torna mai indietro. E la misura non si prende più
+una volta sola all'avvio ma con un `ResizeObserver` sulla colonna: una pagina che nasce in una scheda di
+sfondo si dispone a **zero** — misurata lì, l'outline sarebbe rimasto al minimo per tutta la sessione.
+(Beccato proprio così: nel pannello del browser nascosto `body.clientHeight` è 0. Quarta incarnazione
+della stessa trappola — giri 5, 6, 14, questa — stavolta sulle misure invece che sui frame.)
+
+**Verificato** (dev :3000, chiaro **e** scuro, console **pulita**, `test/smoke.sh` **31/31** — niente di
+nuovo lato server. Due progetti usa-e-getta, entrambi **eliminati** a fine giro — uno mio con `report`,
+un file incluso e un `.bib`, e un secondo per il check di Tommy, perché sul progetto d'esempio non c'è
+abbastanza struttura da guardare: in libreria è rimasto solo «Sample paper»)
+- **21 casi sul parser vero** (script usa-e-getta che **ritaglia** le funzioni da `app.js` invece di
+  ricopiarle, così non può divergere; non è in `test/` — se lo vogliamo stabile va scritto come
+  `smoke.sh`, in un container suo): stellate, titolo breve, commenti interi e a metà riga, `\%`, markup e
+  matematica nel titolo, graffe annidate, titolo su due righe, `\sectioning{}` che non è una sezione,
+  graffa mai chiusa, file di soli `\subsection`. **2000 sezioni in 16,6 ms** — la scansione resta lineare.
+- **Click su «Deeper still»** → cursore sulla **riga 24**, esattamente `\subsubsection{Deeper still}`.
+- **Cursore a fine documento** → si illumina «Ninety-nine % sure» (l'ultima sezione prima di lì), e con il
+  pannello al minimo (72px, contenuto 220px) la riga **rientra in vista da sola** — muovendo solo lo
+  scorrimento dell'outline, non quello della colonna.
+- **Cambio file**: `notes.bib` → «l'outline legge sorgenti LaTeX»; `parts/included.tex` → le sue quattro
+  voci; chiusi tutti i tab → «Nothing open».
+- **Sezione commentata via** (riga 30 del file di prova): non compare. **`\section*`**: compare.
+- **Maniglione**: 190→310px, il valore si salva; tirato in giù si ferma a **72px**; richiuso → l'albero si
+  riprende tutta la colonna (554px) e il maniglione smette di essere una maniglia. Ricaricata la pagina:
+  richiuso com'era, e riaprendolo torna a **310px** — la richiesta è sopravvissuta.
+- **Rail**: andata e ritorno su Review e colonna richiusa e riaperta senza che l'altezza si perda.
+- **Controprova sul progetto d'esempio**: `sections/math.tex` mostra «Some Mathematics» evidenziata;
+  `main.tex` — che ha solo `\input` — dice onestamente che sezioni non ne ha.
+
+**Cosa NON c'è, di proposito**: le frecce di richiusura **per singola voce** (Overleaf le ha; qui la
+testata richiude tutto, che è quel che chiedeva il punto 5) e l'outline di progetto di cui sopra.
+
+**Anche la lista di idee di Tommy è finita** (cinque punti: tre nel giro 13, il quarto nel 14, questo il
+quinto). Restano dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL per-progetto) e
+**template** (Step G, da scrivere prima).
+
+⚠️ **Non è live**: `public/` soltanto, ma serve comunque il pull+rebuild sul VPS (Albi) — fermo a
+`1541753`, quindi gli mancano i giri dall'8 in poi, questo compreso.
+
+---
+
 ## 2026-08-05 (quinquies) — Giro 14: il PDF si apre dove sta il cursore ✅ (check di Tommy OK)
 
 **Punto 4 della lista di Tommy.** Il giro 13 aveva già stabilito che costava poco: la macchina SyncTeX
