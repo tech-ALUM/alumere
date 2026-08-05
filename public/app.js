@@ -894,7 +894,12 @@ function renderIssues(issues) {
 let pdfBlob = null;
 let compileStarted = false;   // once a real compile begins, the cached build must not apply
 let compiling = false;        // one build at a time — the button is disabled, ⌘S must agree
-async function compile() {
+// `jumpToCursor` is only for the compiles you ASK for — Recompile and ⌘S (giro 14). The
+// open-time build and the one after a history restore leave the PDF at the top, which is
+// where you want it when you haven't pointed at anything yet: at open the cursor is only
+// wherever the last session left it, and after a restore it points into a document that has
+// just been replaced under it.
+async function compile({ jumpToCursor = false } = {}) {
   if (compiling) return;
   compiling = true;
   compileStarted = true;
@@ -916,6 +921,14 @@ async function compile() {
       await loadSyncTex(data.synctex, data.synctexRoot);   // editor ⇄ PDF map for this build
       showTab("pdf");                                  // pdfDoc is set now → the zoom bar shows
       setStatus("ok", "Compiled ✓");
+      // "Show me where I am": the rebuilt PDF lands on the line the cursor is on instead of
+      // at page 1. On a long document, hunting for the paragraph you just changed was the
+      // tax on every single rebuild. It's the same jump (and the same flash) as the ➜ on the
+      // divider, so it reads as something you already know — and it goes quietly nowhere
+      // when it can't be made, leaving the PDF exactly where compiles have always left it:
+      // no map (an engine that wrote no synctex), or an open file that never reached the
+      // build (a .bib, a .tex nobody \inputs).
+      if (jumpToCursor) syncForward();
     } else {
       const nErr = issues.filter((x) => x.kind === "error").length;
       setStatus("err", nErr ? `${nErr} error${nErr === 1 ? "" : "s"}` : "Errors");
@@ -3349,7 +3362,9 @@ async function init() {
   // Toolbar + layout (independent of sync).
   cachedBuildPromise = loadCachedBuild();   // the last compiled PDF, while we sync
   renderTree(); applyLayout(); setupSplitters(); setupProjMenu(); setupUpload();
-  $("recompile").addEventListener("click", compile);
+  // Wrapped, not passed by reference: a bare listener hands the click Event to compile(),
+  // which would land in the options object.
+  $("recompile").addEventListener("click", () => compile({ jumpToCursor: true }));
   $("newFile").addEventListener("click", newFile);
   $("newFolder").addEventListener("click", newFolder);
   $("download").addEventListener("click", () => {
@@ -3390,7 +3405,7 @@ async function init() {
     if (e.key === "Escape" && spellMenuEl && !spellMenuEl.hidden) { closeSpellMenu(); return; }
     if (e.key === "Escape" && commentDom && !commentDom.pop.hidden) { closeCommentOverlays(); return; }
     if (e.key === "Escape" && !$("historyOverlay").hidden) { closeHistory(); return; }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); revealPreview(); compile(); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); revealPreview(); compile({ jumpToCursor: true }); }
   });
 }
 init();
