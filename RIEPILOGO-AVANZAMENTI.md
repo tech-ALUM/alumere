@@ -7,6 +7,70 @@
 
 ---
 
+## 2026-08-05 (quinquies) — Giro 14: il PDF si apre dove sta il cursore ✅ (check di Tommy OK)
+
+**Punto 4 della lista di Tommy.** Il giro 13 aveva già stabilito che costava poco: la macchina SyncTeX
+c'era tutta dal giro precedente (`syncForward()` **è** la freccina ➜ sul divisorio). Il lavoro previsto era
+chiamarla da sola e decidere i casi di bordo. Quello imprevisto — e più grosso — è saltato fuori provando.
+
+**Il salto, e quali compilazioni lo meritano.** Solo quelle che **chiedi tu**: Recompile e ⌘S. Non salta
+la compilazione **all'apertura** del progetto (lì il cursore è soltanto dove l'ha lasciato la sessione
+scorsa) né quella dopo un **ripristino dalla history** (lì punta dentro un documento appena sostituito
+sotto di lui). Le altre regole cadono da sé:
+- Su una compilazione **fallita** non si salta: davanti resta il log, e portare qualcuno dentro un PDF
+  vecchio sarebbe una bugia.
+- Quando il salto **non si può fare** non succede niente — nessuna mappa synctex, o un file aperto che
+  nella build non è mai entrato (un `.bib`, un `.tex` che nessuno include). Il PDF resta dov'era.
+- Il bottone va **avvolto** nel listener (`() => compile({...})`): passato per riferimento, l'oggetto
+  Event del click sarebbe finito dentro le opzioni.
+
+**Il difetto preesistente che rendeva la funzione inutile.** Col file incluso aperto il salto non partiva —
+**e non partiva nemmeno la freccina manuale**, quindi non era colpa della chiamata nuova. Guardando il
+file synctex vero: `Input:15:…/sections/beta.tex` **c'è**, ma **oltre la riga `Content:`**, e il parser
+smetteva di leggere gli `Input:` appena entrava nel contenuto. Il motivo sta nel formato: un file incluso
+a metà documento viene aperto **dopo** che la prima pagina è già stata sfornata, e synctex ne scrive il
+record lì dove succede.
+- Quindi **il salto non ha mai funzionato per nessun file `\input`-ato a metà documento**, in nessuna delle
+  due direzioni: `tagOf` non lo trovava (avanti) e `pathOf` non sapeva ricondurre un click al file (inverso).
+- **Non se n'era accorto nessuno** perché su un documento corto TeX apre tutto prima di sfornare pagina 1,
+  e lì ogni record sta in testa — che è esattamente la forma del progetto d'esempio su cui la cosa era
+  stata collaudata nei giri scorsi. Il caso rotto era proprio quello «documento molto lungo» da cui è nata
+  la richiesta.
+- Corretto leggendo gli `Input:` ovunque compaiano. Nessuna ambiguità: i record del contenuto iniziano
+  tutti con un singolo carattere-codice (`{ } ( ) h v x k g $ [ ]`), mai con una `I` maiuscola.
+
+**Verificato** (progetto **usa-e-getta da 10 pagine** con un file incluso e un `.bib`; console pulita,
+`test/smoke.sh` **31/31** — niente di nuovo lato server)
+- Cursore su **GAMMA-12** → ricompilo → **pagina 9/10**, fascia dentro quel paragrafo.
+- Cursore su **BETA-10 nel file incluso** → **pagina 6/10**, paragrafo giusto. *(Prima del fix: niente,
+  in silenzio.)*
+- **Doppio click** sulla pagina 6 → apre `beta.tex` alla **riga 29**, il paragrafo cliccato: il fix ripara
+  tutti e due i versi.
+- **⌘S col cursore nel preambolo** → la riga senza output cade in avanti e si torna a **pagina 1**, fascia
+  sulla prima riga stampata.
+- **`.bib` aperto** → compilo → il PDF **resta a pagina 9**, nessuno scatto.
+- **Compilazione fallita** (`\comandoInesistenteXYZ`) → log in primo piano, `main.tex:69` segnalato,
+  **nessun salto**.
+- **Controprova sul progetto d'esempio**: `sections/math.tex` continua a risolversi — il parser non ha
+  rotto il caso comune.
+- Progetto di prova **cestinato ed eliminato**, cartella sparita da disco (in libreria è rimasto solo
+  «Sample paper»).
+- **Scoperta misurando**, contro quel che davo per scontato: **una compilazione conserva già la posizione
+  di scorrimento**, non riparte dall'alto. Quindi il cambiamento vero non è «invece di tornare in cima» ma
+  **«invece di restare dov'eri, vai dove sei»** — che è poi esattamente la richiesta, ma val la pena
+  raccontarlo giusto.
+- **Nota di metodo**: il primo istinto, quando il file incluso non saltava, era di aver sbagliato la
+  chiamata nuova. A scagionarla è stato provare la **freccina manuale** (rotta uguale) e poi andare a
+  leggere il **file synctex vero** invece del codice. Il difetto era a due strati di distanza da dove
+  stavo guardando.
+
+**Restano dalla lista di Tommy**
+- **Punto 5, l'outline delle sezioni** stile Overleaf: parser dei `\section` + pannello sotto l'albero con
+  maniglione e testata richiudibile, click che porta alla riga, evidenziazione della sezione corrente. È
+  l'ultimo della lista ed è un giro intero suo.
+
+---
+
 ## 2026-08-05 (quater) — Giro 13: la history nel rail, il 100% che vuol dire qualcosa ✅ (check di Tommy OK)
 
 **Il primo giro nato da una lista di idee di Tommy, non dalla lista del 18 luglio** (quella è chiusa dal
