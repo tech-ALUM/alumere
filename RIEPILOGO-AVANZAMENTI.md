@@ -7,6 +7,88 @@
 
 ---
 
+## 2026-08-05 (bis) — Giro 11: il cestino, e l'eliminazione definitiva diventa a due stadi ⏳ (in attesa del check di Tommy)
+
+Il primo dei due punti rimasti in lista dal 18 luglio (l'altro è **tag in massa**). Fino a ieri
+`DELETE /api/projects/:id` faceva `rm -rf` della cartella dietro un `confirm()` nativo: **un click e
+un progetto spariva per tutti**, senza rete. Ora la cancellazione è in due tempi, e il colpo
+irreversibile è l'unico che non si può dare per sbaglio. **Niente commit**: aspetta il suo check.
+
+**Le due decisioni di Tommy**, prese prima di scrivere una riga: il cestino **non si svuota da solo**
+(niente scadenza a 30 giorni: nessuna perdita di dati a sorpresa e nessun job periodico da
+sorvegliare), e **conferma su entrambi i pulsanti**, con testi diversi.
+
+**① Due stadi, e il secondo è chiuso a chiave dal server.** Il Delete di riga ora sposta nel cestino
+(`meta.deleted` + `deletedAt` + `deletedBy`, stessa forma di `archived`: niente si muove su disco e
+`updatedAt` non si tocca — buttare via non è editare). Il `DELETE` vero **rifiuta con 409 un progetto
+che non sia già nel cestino**. È in `server.js`, non nella UI, di proposito: è l'unica chiamata
+dell'API che non si può annullare, e una regola che vive solo nel client la aggira chiunque.
+Resta idempotente su una cartella senza `meta.json` (è già detrito).
+
+**② Il pop-up chiesto da Tommy**, e `window.confirm()` va in pensione. Un dialogo vero
+(`confirmDialog`), perché il nativo non si può tematizzare, non sa dire **quale** bottone è quello
+pericoloso, e stampa l'origine sopra la domanda ("localhost:3000 says") — brutta compagnia per "questa
+azione è irreversibile". Tre dettagli che contano:
+- **Il fuoco parte su Cancel**, non sull'azione: un Invio distratto non deve distruggere niente.
+- **Tab resta dentro** il dialogo (ciclo fra i due bottoni), Esc e il click sullo sfondo annullano.
+- Il bottone distruttivo è **corallo**, quello reversibile è l'accento normale. Spostare nel cestino
+  e distruggere non devono somigliarsi.
+- Ci è passato anche l'**elimina tag**, che era l'ultimo `confirm()` nativo rimasto sulla home:
+  lasciarne uno accanto a un dialogo vero sembrava un pezzo rotto.
+
+**③ La vista Cestino**, gemella di Archiviati: voce nel rail col conteggio, e un progetto cestinato
+**sparisce da ogni altra vista** — archivio, tag, "Senza tag", conteggi compresi. Sta uscendo dalla
+libreria, non deve continuare a colorarla. Dentro: solo **Restore** e **Delete permanently**, la
+colonna "Last modified" diventa **"Deleted"** (lì la data utile è quella del cestinamento), i chip dei
+tag restano ma in sola lettura, e in cima c'è **Empty trash** (compare solo a cestino pieno).
+- **La riga non apre più niente al click**: nessuno deve lavorare per mezz'ora dentro un progetto
+  condannato e perdere tutto quando qualcuno svuota. Restore è un click, e rimette il progetto
+  esattamente dov'era — `archived` non viene toccato, quindi un archiviato torna nell'archivio.
+
+**④ Il nome non resta in ostaggio.** `findProjectByName` **salta i cestinati**: se no, creando
+"Thesis" ti prendevi un 409 che punta a un progetto che non puoi vedere. Il conto si paga al
+ripristino, dove il nome può essere stato occupato nel frattempo: il server **suffissa** come già fa
+l'upload di zip (`Thesis (2)`) invece di rifiutare — un restore che fallisce per un'etichetta
+lascerebbe il progetto bloccato nel cestino con l'unica uscita di cancellarlo. Il client lo dice:
+`Restored as "Thesis (2)" ✓`.
+
+**Verificato** (dev :3000, browser reale, chiaro + scuro, console pulita, `test/smoke.sh` **31/31** —
+era 23, otto check nuovi tutti sul cestino)
+- **I due dialoghi a schermo**: "Move to trash?" con l'azione in accento, "Delete permanently?" con la
+  frase richiesta *"This action is irreversible. Are you sure you want to continue?"* sul bottone
+  corallo. Esc annulla senza toccare niente (verificato: nessun progetto cestinato dopo l'Esc), Tab
+  cicla Cancel → Delete → Cancel, il fuoco parte su Cancel.
+- **Giro completo**: cestinato → riga con icona in grigio, "Deleted now · Paolo Rossi", solo le due
+  azioni, chip senza ×, click sulla riga **non apre** (URL invariato). Restore → torna in lista **col
+  suo tag**, cestino vuoto e "Empty trash" sparito da solo.
+- **Delete definitivo**: confermato → sparito dalla lista **e la cartella non è più su disco**
+  (controllata dentro il container). Empty trash su 4 progetti → "Delete 4 projects" nel dialogo,
+  poi "Trash emptied ✓".
+- **Le tre regole del server**, provate via API: `DELETE` su progetto vivo → **409 "Move the project
+  to the trash first."**; creare un omonimo di un cestinato → **200**; ripristinarlo → **`zz-trash-A
+  (2)`**.
+- **Isolamento dalle altre viste**: tag con un solo progetto, cestinato → conteggio a zero e vista del
+  tag vuota. L'elimina-tag conta invece **anche** i cestinati ("removed from 1 project"), perché la
+  cascata arriva pure lì — verificato che dopo l'eliminazione il cestinato avesse `tags: []`.
+- **Finestra a 375px**: titolo, Empty trash e ricerca convivono senza trabocco (`scrollWidth ==
+  clientWidth` sia sulla pagina sia sulla testata).
+- Prove tutte su progetti **usa-e-getta**, cancellati a fine giro (libreria di nuovo col solo "Sample
+  paper", il suo `meta.json` intatto, `updatedAt` fermo al 2 agosto). Tema rimesso su "auto".
+- Solita trappola del tool, quinta volta: col pannello del browser nascosto il viewport è **0x0** e
+  `read_page` torna vuoto — uno screenshot forza un frame e si riparte.
+
+**Rimandato di proposito**
+- **Aprire un cestinato via URL diretto** (o segnalibro) **funziona ancora**: la riga non ci porta più,
+  ma l'editor non ha un cartello "questo è nel cestino". Da fare quando si toccherà l'editor.
+- **Nessuna selezione multipla**: cestinare venti progetti sono venti click. È esattamente il punto
+  **tag in massa**, che porta con sé archivia/cestina in massa — l'altro giro rimasto in lista.
+- **Nessuna GC del cestino**: per scelta, vedi sopra.
+
+⚠️ **Non è live**: `server.js` + file statici, serve il pull+rebuild sul VPS (Albi) — fermo a
+`1541753`, quindi gli mancano i giri 8, 9, 10, la coda e questo.
+
+---
+
 ## 2026-08-05 — Coda del giro 10: il doppio render e il badge che non tornava dalla cache ✅ (check di Tommy OK)
 
 I due residui dichiarati a fine giro 10, chiusi. Il giro 10 nel frattempo è stato **committato e
