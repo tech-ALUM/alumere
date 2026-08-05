@@ -284,6 +284,40 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 .row.drop-hover { background: var(--accent-soft); outline: 1.5px dashed var(--accent); outline-offset: -1.5px; }
 .tree.drop-root { outline: 1.5px dashed var(--accent); outline-offset: -3px; border-radius: 8px; background: var(--accent-soft); }
 
+/* ---------- File outline (giro 15) ---------- */
+/* Sits at the foot of the files column: the tree takes whatever is left (flex: 1), the
+   outline keeps the height you dragged it to. Folded, only the header strip survives —
+   and the grip stops being a handle, since there'd be nothing to size. */
+.outline { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+.outline-grip { height: 6px; flex: 0 0 6px; cursor: row-resize; position: relative; }
+.outline-grip::after { content: ""; position: absolute; inset: 0 2px; background: var(--line); }
+.outline-grip:hover::after { background: var(--accent); }
+.outline[data-folded] .outline-grip { cursor: default; }
+.outline[data-folded] .outline-grip:hover::after { background: var(--line); }
+.outline-head {
+  height: var(--head-h); flex: 0 0 var(--head-h); width: 100%;
+  display: flex; align-items: center; gap: 7px; padding: 0 12px;
+  border: 0; background: var(--panel-2); color: var(--muted);
+  font-family: var(--ui-font); font-size: 12px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.outline:not([data-folded]) .outline-head { border-bottom: 1px solid var(--line); }
+.outline-head:hover { color: var(--accent-d); }
+.outline-head .caret { font-size: 9px; width: 8px; }
+/* position: relative makes the rows' offsetTop relative to THIS box, which is what
+   keeps the current row in sight without scrolling any ancestor (see the JS). */
+.outline-body { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; padding: 4px; }
+.outline[data-folded] .outline-body { display: none; }
+.outline-list, .outline-list ul { list-style: none; margin: 0; padding: 0; }
+.outline-row {
+  display: block; width: 100%; border: 0; background: none; text-align: left;
+  font-family: var(--ui-font); font-size: 13px; line-height: 1.35; color: var(--ink);
+  padding: 3px 6px; border-radius: 6px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.outline-row:hover { background: var(--accent-soft); }
+.outline-row.cur { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.outline-empty { padding: 8px 8px 10px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
 /* ---------- Editor ---------- */
 /* Losing the socket is not an error and not data loss — the CRDT merges the backlog on
    reconnect — so this warns in orange rather than red, and says exactly that. Only shown
@@ -481,6 +515,8 @@ body[data-conn="offline"] .offline-bar { display: flex; }
    preview from capturing the mouse (which would fight the drag). */
 body.dragging { cursor: col-resize; user-select: none; }
 body.dragging .pdf-scroll { pointer-events: none; }
+/* The outline's grip is the one horizontal divider in here (giro 15). */
+body.dragging-v { cursor: row-resize; user-select: none; }
 .logwrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .log {
   flex: 1 1 auto; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto;

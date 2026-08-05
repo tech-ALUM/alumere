@@ -395,6 +395,7 @@ function onFilesChanged() {
     if (view) { view.destroy(); view = null; }
     closeCommentOverlays();
     closeSpellMenu();
+    refreshOutline();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
   }
   renderTabs();
@@ -701,6 +702,7 @@ function closeTab(path) {
     if (view) { view.destroy(); view = null; }
     closeCommentOverlays();
     closeSpellMenu();
+    refreshOutline();                                      // nothing open → nothing to outline
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
     renderTree();
   }
@@ -737,6 +739,7 @@ function openFile(path) {
         keymap.of(yUndoManagerKeymap),
         ...commentExtensions(),
         ...spellExtensions(),
+        ...outlineExtensions(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some((tr) => tr.isUserEvent("input") || tr.isUserEvent("delete"))) noteLocalEdit();
         }),
@@ -746,6 +749,7 @@ function openFile(path) {
   view = new EditorView({ state, parent: editorHost });
   refreshCommentDecos();             // paint this file's comment highlights (no-op on binary)
   scheduleSpellcheck(300);           // first spell pass for the freshly opened file
+  refreshOutline();                  // the outline is of the OPEN file, so it changes with it
   view.scrollDOM.addEventListener("scroll", repositionOverlays, { passive: true });
   try { provider.awareness.setLocalStateField("activeFile", path); } catch {}
   renderTree();
@@ -2246,6 +2250,275 @@ function spellExtensions() {
   ];
 }
 
+// ---------- File outline (giro 15): the sections of the file you have open ----------
+// Overleaf-style, and like Overleaf it reads the OPEN file rather than the whole project:
+// it's the map of what's under the cursor, which is what makes "you are here" mean
+// something. The parse is a plain scan of the source — no LaTeX expansion, no compile —
+// with comments blanked out first, so a section you commented away doesn't keep its row.
+const SECT_CMDS = ["part", "chapter", "section", "subsection", "subsubsection", "paragraph", "subparagraph"];
+const SECT_RANK = new Map(SECT_CMDS.map((c, i) => [c, i]));
+// \subsection matches "subsection" and not "section" because the \ anchors the whole
+// alternation; the lookahead is what stops \sectionsomething from passing as \section.
+const SECT_RE = new RegExp(`\\\\(${SECT_CMDS.join("|")})\\*?(?![a-zA-Z])`, "g");
+const OUTLINE_KEY = "alumere.outline";
+
+let outlineItems = [];          // rows on screen, in document order: { rank, title, line, depth }
+let outlineFolded = false;
+let outlineH = 190;             // px of the body, dragged with the grip
+let outlineTimer = null;
+
+// Blank out every comment tail, keeping the text's LENGTH intact — every index (and so
+// every line number) still points where it did. A % is only a comment when the run of
+// backslashes before it is even: \% is a percent sign, \\% starts a comment.
+function maskTexComments(text) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const s = lines[i];
+    let bs = 0;
+    for (let j = 0; j < s.length; j++) {
+      const c = s[j];
+      if (c === "\\") { bs++; continue; }
+      if (c === "%" && bs % 2 === 0) { lines[i] = s.slice(0, j) + " ".repeat(s.length - j); break; }
+      bs = 0;
+    }
+  }
+  return lines.join("\n");
+}
+
+// Read a balanced {…} or […] group whose opening character sits at `i`. Returns
+// { body, end } (end = just past the closing one), or null when it never closes — a file
+// caught mid-typing, where no row at all beats a row swallowing the rest of the document.
+function readGroup(s, i, open = "{", close = "}") {
+  if (s[i] !== open) return null;
+  let depth = 0;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (c === "\\") { j++; continue; }                     // \{ and \} are characters, not braces
+    if (c === open) depth++;
+    else if (c === close && --depth === 0) return { body: s.slice(i + 1, j), end: j + 1 };
+  }
+  return null;
+}
+
+// What the row SHOWS. The stored title is LaTeX: strip the markup, keep the words —
+// \textbf{Bold} → Bold, \label{…} and friends vanish whole, escaped characters become
+// themselves. \LaTeX & co. are spelled out: dropping them can eat half a title.
+function cleanSectionTitle(s) {
+  return s
+    .replace(/\\(?:label|index|footnote|thanks|protect|nonumber)\s*\{[^{}]*\}/g, "")
+    .replace(/\\LaTeXe(?![a-zA-Z])/g, "LaTeX2e").replace(/\\LaTeX(?![a-zA-Z])/g, "LaTeX")
+    .replace(/\\TeX(?![a-zA-Z])/g, "TeX")
+    .replace(/\\\\/g, " ")
+    .replace(/\\([%&_#$^{}])/g, "$1")                      // escaped characters are just characters
+    .replace(/\\[a-zA-Z]+\s*/g, "")                        // any other command: drop the name, keep its argument
+    .replace(/[{}$]/g, "")
+    .replace(/~/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Source → headings in document order. Line numbers are counted forward as we go (the
+// matches only ever move right), so this stays one pass over the file.
+function parseOutline(text) {
+  const masked = maskTexComments(text);
+  const out = [];
+  let scanned = 0, line = 1, m;
+  SECT_RE.lastIndex = 0;
+  while ((m = SECT_RE.exec(masked))) {
+    let i = m.index + m[0].length;
+    while (i < masked.length && /\s/.test(masked[i])) i++;
+    if (masked[i] === "[") {                               // \section[short]{full} — the short form is for the ToC
+      const opt = readGroup(masked, i, "[", "]");
+      if (!opt) continue;
+      i = opt.end;
+      while (i < masked.length && /\s/.test(masked[i])) i++;
+    }
+    const g = readGroup(masked, i, "{", "}");
+    if (!g) continue;
+    while (scanned < m.index) { if (masked[scanned] === "\n") line++; scanned++; }
+    out.push({ rank: SECT_RANK.get(m[1]), title: cleanSectionTitle(g.body) || "(untitled)", line });
+    SECT_RE.lastIndex = g.end;                             // never rescan a title's own braces
+  }
+  return out;
+}
+
+// Indent depth reads off the FILE, not off LaTeX's ladder: a file made of \subsections
+// only is a flat list, not a list pushed three steps to the right. Hence a stack of the
+// open ancestors' ranks — the same shape the document has.
+function outlineRows(items) {
+  const stack = [];
+  return items.map((it) => {
+    while (stack.length && stack[stack.length - 1] >= it.rank) stack.pop();
+    const depth = stack.length;
+    stack.push(it.rank);
+    return { ...it, depth };
+  });
+}
+
+// The text the outline is OF: the open file, and only if it's LaTeX source. Read from the
+// editor rather than the shared map, because the cursor indexes into exactly this doc.
+function outlineSourceText() {
+  if (!currentPath || !view || !/\.(tex|ltx)$/i.test(currentPath)) return null;
+  return view.state.doc.toString();
+}
+
+function outlineNote(text) {
+  const d = document.createElement("div");
+  d.className = "outline-empty";
+  d.textContent = text;
+  return d;
+}
+
+function refreshOutline() {
+  const body = $("outlineBody");
+  if (!body) return;
+  const text = outlineSourceText();
+  outlineItems = text == null ? [] : outlineRows(parseOutline(text));
+  body.innerHTML = "";
+  if (text == null) {
+    body.appendChild(outlineNote(currentPath ? "No outline here — the outline reads LaTeX sources (.tex)." : "Nothing open."));
+    return;
+  }
+  if (!outlineItems.length) {
+    body.appendChild(outlineNote("No sections in this file. \\section{…} and its relatives appear here as you write them."));
+    return;
+  }
+  const ul = document.createElement("ul");
+  ul.className = "outline-list";
+  outlineItems.forEach((it, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "outline-row";
+    b.style.paddingLeft = `${6 + it.depth * 13}px`;
+    b.textContent = it.title;                              // never innerHTML: this comes from the document
+    b.title = `${it.title} · \\${SECT_CMDS[it.rank]}, line ${it.line}`;
+    b.addEventListener("click", () => gotoOutline(i));
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  body.appendChild(ul);
+  updateOutlineCurrent(true);
+}
+
+function scheduleOutline(delay = 350) {
+  clearTimeout(outlineTimer);
+  outlineTimer = setTimeout(() => { outlineTimer = null; refreshOutline(); }, delay);
+}
+
+// Click a row → the cursor goes to that heading. `y: "start"` parks it at the top of the
+// viewport instead of scrolling the bare minimum: from a map you expect to land ON the
+// section, with its text below it, not to have it creep in from the bottom edge.
+function gotoOutline(i) {
+  const it = outlineItems[i];
+  if (!it || !view) return;
+  revealEditor();
+  const doc = view.state.doc;
+  const pos = doc.line(Math.max(1, Math.min(it.line, doc.lines))).from;
+  const { EditorView } = CM.view;
+  const spec = { selection: { anchor: pos } };
+  if (typeof EditorView.scrollIntoView === "function") spec.effects = EditorView.scrollIntoView(pos, { y: "start", yMargin: 16 });
+  else spec.scrollIntoView = true;
+  view.dispatch(spec);
+  view.focus();
+}
+
+// Which heading the cursor is inside = the last one at or before its line. This runs on
+// every cursor move, so it does nothing until the answer actually changes; `force` is for
+// the two moments the DOM changed under it (a rebuild, an unfold) and the answer didn't.
+// Keeping that row in sight is half the point of the panel, so scroll it back — by hand,
+// on the body's own scrollTop: element.scrollIntoView() would nudge its ancestors too.
+let outlineCur = -1;
+function updateOutlineCurrent(force = false) {
+  const body = $("outlineBody");
+  if (!body) return;
+  const rows = body.querySelectorAll(".outline-row");
+  if (!rows.length) { outlineCur = -1; return; }
+  let cur = -1;
+  if (view && outlineItems.length) {
+    const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+    for (let i = 0; i < outlineItems.length; i++) { if (outlineItems[i].line <= line) cur = i; else break; }
+  }
+  if (cur === outlineCur && !force) return;
+  outlineCur = cur;
+  rows.forEach((r, i) => r.classList.toggle("cur", i === cur));
+  if (cur < 0 || outlineFolded) return;
+  const row = rows[cur], top = row.offsetTop, bottom = top + row.offsetHeight;
+  if (top < body.scrollTop) body.scrollTop = top - 4;
+  else if (bottom > body.scrollTop + body.clientHeight) body.scrollTop = bottom - body.clientHeight + 4;
+}
+
+// The outline follows the text — mine and my peers', since remote edits arrive through
+// this same pipeline — and the highlight follows the cursor. The two run at different
+// speeds on purpose: re-parsing per keystroke is waste, moving the highlight is free.
+function outlineExtensions() {
+  const { EditorView } = CM.view;
+  return [EditorView.updateListener.of((u) => {
+    if (u.docChanged) scheduleOutline();
+    if (u.docChanged || u.selectionSet) updateOutlineCurrent();
+  })];
+}
+
+// Never taller than leaves the tree usable. A hidden panel has no height to measure, so
+// there's nothing to clamp against — keep the stored value until it's on screen again.
+function outlineMaxH() {
+  const pane = $("filesPane");
+  const h = pane && !pane.hidden ? pane.clientHeight : 0;
+  return h ? Math.max(90, h - 150) : Infinity;
+}
+const clampOutlineH = (h) => Math.max(72, Math.min(outlineMaxH(), h));
+
+// `outlineH` is the height you ASKED for; the clamp is applied on the way to the DOM and
+// never written back. Storing the clamped value instead loses the ask: a window squeezed
+// short and reopened would keep the squeezed outline forever, having forgotten the rest.
+function applyOutlineSize() {
+  const pane = $("outlinePane"), body = $("outlineBody"), head = $("outlineToggle");
+  if (!pane || !body || !head) return;
+  if (outlineFolded) pane.dataset.folded = "1"; else delete pane.dataset.folded;
+  body.style.height = `${clampOutlineH(outlineH)}px`;
+  head.setAttribute("aria-expanded", outlineFolded ? "false" : "true");
+  head.querySelector(".caret").textContent = outlineFolded ? "▸" : "▾";
+}
+function saveOutlinePrefs() {
+  try { localStorage.setItem(OUTLINE_KEY, JSON.stringify({ h: outlineH, folded: outlineFolded })); } catch {}
+}
+function setupOutline() {
+  try {
+    const s = JSON.parse(localStorage.getItem(OUTLINE_KEY) || "null");
+    if (s && Number.isFinite(s.h)) outlineH = s.h;
+    if (s && typeof s.folded === "boolean") outlineFolded = s.folded;
+  } catch {}
+  applyOutlineSize();
+  $("outlineToggle").addEventListener("click", () => {
+    outlineFolded = !outlineFolded;
+    applyOutlineSize(); saveOutlinePrefs();
+    if (!outlineFolded) updateOutlineCurrent(true);      // unfolding must land you where you are
+  });
+  $("outlineGrip").addEventListener("mousedown", (e) => {
+    if (outlineFolded) return;                           // folded: the grip is a line, not a handle
+    e.preventDefault();
+    const startY = e.clientY, startH = outlineH;
+    document.body.classList.add("dragging-v");
+    const move = (ev) => { outlineH = clampOutlineH(startH - (ev.clientY - startY)); applyOutlineSize(); };
+    const up = () => {
+      document.body.classList.remove("dragging-v");
+      document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+      saveOutlinePrefs();
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+  // The clamp is a measurement, so it has to be re-taken whenever the column changes
+  // height: a shorter window must give the tree its room back, a taller one must hand the
+  // outline back the height it asked for. Watching the pane rather than the window also
+  // covers the case where there was nothing to measure YET at load — a page that starts
+  // in a background tab lays out at zero, and a single measurement there would park the
+  // outline at its minimum for the whole session.
+  if (typeof ResizeObserver === "function") new ResizeObserver(applyOutlineSize).observe($("filesPane"));
+  else window.addEventListener("resize", applyOutlineSize);
+  refreshOutline();
+}
+
 // ---------- Side panels (giro 5): icon rail — Files · Review · Chat ----------
 // One panel occupies the left column at a time (the hidden ones leave the grid, see CSS).
 // Review lists EVERY thread of the project — open, resolved, orphaned — with jump/reply/
@@ -3361,7 +3634,7 @@ async function init() {
 
   // Toolbar + layout (independent of sync).
   cachedBuildPromise = loadCachedBuild();   // the last compiled PDF, while we sync
-  renderTree(); applyLayout(); setupSplitters(); setupProjMenu(); setupUpload();
+  renderTree(); applyLayout(); setupSplitters(); setupProjMenu(); setupUpload(); setupOutline();
   // Wrapped, not passed by reference: a bare listener hands the click Event to compile(),
   // which would land in the options object.
   $("recompile").addEventListener("click", () => compile({ jumpToCursor: true }));

@@ -103,6 +103,20 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
       </div>
       <ul id="tree" class="tree"></ul>
       <div class="files-hint">Click a file to open it · drop files here to upload them</div>
+
+      <!-- File outline (giro 15), Overleaf-style: the sections of the file you have OPEN,
+           at the foot of the same column as the tree. The grip above the header resizes it,
+           the header folds it away, a click on a row moves the cursor there, and the row
+           the cursor is currently inside stays highlighted. -->
+      <div class="outline" id="outlinePane">
+        <div class="outline-grip" id="outlineGrip" title="Drag to resize the outline"></div>
+        <button class="outline-head" id="outlineToggle" type="button" aria-expanded="true"
+                aria-controls="outlineBody" title="Sections of the open file — click to fold">
+          <span class="caret">▾</span>
+          <span>File outline</span>
+        </button>
+        <div class="outline-body" id="outlineBody"></div>
+      </div>
     </section>
 
     <!-- Review panel (giro 5): every comment thread of the project — open, resolved and
