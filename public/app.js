@@ -2262,10 +2262,17 @@ const SECT_RANK = new Map(SECT_CMDS.map((c, i) => [c, i]));
 const SECT_RE = new RegExp(`\\\\(${SECT_CMDS.join("|")})\\*?(?![a-zA-Z])`, "g");
 const OUTLINE_KEY = "alumere.outline";
 
-let outlineItems = [];          // rows on screen, in document order: { rank, title, line, depth }
+let outlineItems = [];          // the file's headings, in document order (see outlineRows)
+let outlineHint = null;         // the note shown INSTEAD of the list ("Nothing open."…)
 let outlineFolded = false;
 let outlineH = 190;             // px of the body, dragged with the grip
 let outlineTimer = null;
+// Which headings are folded shut (giro 16), keyed by file + path down the document — so the
+// state survives both a re-parse (the outline is rebuilt on every edit) and a trip to
+// another tab and back. Session-only, like the tree's folders: it says where you are
+// looking right now, not something worth remembering next week.
+const outlineClosed = new Set();
+const foldKey = (it) => `${currentPath}\u0000${it.key}`;
 
 // Blank out every comment tail, keeping the text's LENGTH intact — every index (and so
 // every line number) still points where it did. A % is only a comment when the run of
@@ -2344,15 +2351,39 @@ function parseOutline(text) {
 
 // Indent depth reads off the FILE, not off LaTeX's ladder: a file made of \subsections
 // only is a flat list, not a list pushed three steps to the right. Hence a stack of the
-// open ancestors' ranks — the same shape the document has.
+// open ancestors — the same shape the document has. The same walk also hands us `parent`
+// (who folds this row away) and `key` (what that fold is remembered by).
 function outlineRows(items) {
-  const stack = [];
-  return items.map((it) => {
-    while (stack.length && stack[stack.length - 1] >= it.rank) stack.pop();
-    const depth = stack.length;
-    stack.push(it.rank);
-    return { ...it, depth };
+  const stack = [];                                        // indices of the ancestors still open
+  const seen = new Map();                                  // same-named siblings, counted
+  const out = [];
+  for (const it of items) {
+    while (stack.length && out[stack[stack.length - 1]].rank >= it.rank) stack.pop();
+    const parent = stack.length ? stack[stack.length - 1] : -1;
+    // The key is the path DOWN THE DOCUMENT, not a line number: every line you type would
+    // shift a line number, and the fold would come undone under your hands on the next
+    // re-parse. Two siblings with the same title get a counter, so folding one of them
+    // doesn't fold the other.
+    // The joint is a NUL — the one character a heading cannot hold, so no title can
+    // ever spell out a key that belongs to a different branch.
+    const base = `${parent < 0 ? "" : out[parent].key}\u0000${it.rank}:${it.title}`;
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    out.push({ ...it, depth: stack.length, parent, key: `${base}#${n}` });
+    stack.push(out.length - 1);
+  }
+  // A child is always the very next row, one step deeper — that's what the stack guarantees.
+  for (let i = 0; i < out.length; i++) out[i].kids = i + 1 < out.length && out[i + 1].depth > out[i].depth;
+  return out;
+}
+
+// Hidden = some ancestor is folded. One pass is enough: a parent always comes first.
+function outlineHidden(items) {
+  const hidden = new Array(items.length).fill(false);
+  items.forEach((it, i) => {
+    hidden[i] = it.parent >= 0 && (hidden[it.parent] || outlineClosed.has(foldKey(items[it.parent])));
   });
+  return hidden;
 }
 
 // The text the outline is OF: the open file, and only if it's LaTeX source. Read from the
@@ -2370,35 +2401,57 @@ function outlineNote(text) {
 }
 
 function refreshOutline() {
-  const body = $("outlineBody");
-  if (!body) return;
+  if (!$("outlineBody")) return;
   const text = outlineSourceText();
   outlineItems = text == null ? [] : outlineRows(parseOutline(text));
+  outlineHint =
+    text == null ? (currentPath ? "No outline here — the outline reads LaTeX sources (.tex)." : "Nothing open.")
+    : outlineItems.length ? null
+    : "No sections in this file. \\section{…} and its relatives appear here as you write them.";
+  drawOutline();
+}
+
+// Draw the headings we already have. Folding a row calls THIS and not refreshOutline: the
+// document hasn't changed, only which of its headings are on screen — no reason to re-parse.
+function drawOutline() {
+  const body = $("outlineBody");
+  if (!body) return;
   body.innerHTML = "";
-  if (text == null) {
-    body.appendChild(outlineNote(currentPath ? "No outline here — the outline reads LaTeX sources (.tex)." : "Nothing open."));
-    return;
-  }
-  if (!outlineItems.length) {
-    body.appendChild(outlineNote("No sections in this file. \\section{…} and its relatives appear here as you write them."));
-    return;
-  }
+  if (outlineHint) { body.appendChild(outlineNote(outlineHint)); return; }
+  const hidden = outlineHidden(outlineItems);
   const ul = document.createElement("ul");
   ul.className = "outline-list";
   outlineItems.forEach((it, i) => {
+    if (hidden[i]) return;
+    const closed = it.kids && outlineClosed.has(foldKey(it));
     const li = document.createElement("li");
     const b = document.createElement("button");
     b.type = "button";
     b.className = "outline-row";
+    b.dataset.i = String(i);                               // the row's identity once folds make the list gappy
     b.style.paddingLeft = `${6 + it.depth * 13}px`;
-    b.textContent = it.title;                              // never innerHTML: this comes from the document
+    const tw = document.createElement("span");
+    tw.className = "outline-twisty";
+    tw.textContent = it.kids ? (closed ? "▸" : "▾") : "";  // childless: an empty slot, so the titles still line up
+    const label = document.createElement("span");
+    label.className = "outline-label";
+    label.textContent = it.title;                          // never innerHTML: this comes from the document
+    b.append(tw, label);
     b.title = `${it.title} · \\${SECT_CMDS[it.rank]}, line ${it.line}`;
-    b.addEventListener("click", () => gotoOutline(i));
+    if (it.kids) b.setAttribute("aria-expanded", closed ? "false" : "true");
+    // The twisty folds, the rest of the row jumps — the same split a folder row has in the tree.
+    b.addEventListener("click", (e) => { if (it.kids && e.target === tw) toggleOutlineFold(i); else gotoOutline(i); });
     li.appendChild(b);
     ul.appendChild(li);
   });
   body.appendChild(ul);
   updateOutlineCurrent(true);
+}
+
+function toggleOutlineFold(i) {
+  const k = foldKey(outlineItems[i]);
+  if (!outlineClosed.delete(k)) outlineClosed.add(k);
+  drawOutline();
 }
 
 function scheduleOutline(delay = 350) {
@@ -2432,18 +2485,23 @@ let outlineCur = -1;
 function updateOutlineCurrent(force = false) {
   const body = $("outlineBody");
   if (!body) return;
-  const rows = body.querySelectorAll(".outline-row");
+  const rows = [...body.querySelectorAll(".outline-row")];
   if (!rows.length) { outlineCur = -1; return; }
+  const byIndex = new Map(rows.map((r) => [Number(r.dataset.i), r]));   // folds make the list gappy
   let cur = -1;
   if (view && outlineItems.length) {
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
     for (let i = 0; i < outlineItems.length; i++) { if (outlineItems[i].line <= line) cur = i; else break; }
+    // Folded away: light up the nearest ancestor still on screen. "You are here" has to keep
+    // pointing somewhere — going dark because you closed a twisty would be a worse answer.
+    while (cur >= 0 && !byIndex.has(cur)) cur = outlineItems[cur].parent;
   }
   if (cur === outlineCur && !force) return;
   outlineCur = cur;
-  rows.forEach((r, i) => r.classList.toggle("cur", i === cur));
-  if (cur < 0 || outlineFolded) return;
-  const row = rows[cur], top = row.offsetTop, bottom = top + row.offsetHeight;
+  rows.forEach((r) => r.classList.toggle("cur", Number(r.dataset.i) === cur));
+  const row = byIndex.get(cur);
+  if (!row || outlineFolded) return;
+  const top = row.offsetTop, bottom = top + row.offsetHeight;
   if (top < body.scrollTop) body.scrollTop = top - 4;
   else if (bottom > body.scrollTop + body.clientHeight) body.scrollTop = bottom - body.clientHeight + 4;
 }

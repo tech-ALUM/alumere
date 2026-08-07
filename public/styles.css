@@ -309,13 +309,22 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 .outline[data-folded] .outline-body { display: none; }
 .outline-list, .outline-list ul { list-style: none; margin: 0; padding: 0; }
 .outline-row {
-  display: block; width: 100%; border: 0; background: none; text-align: left;
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; border: 0; background: none; text-align: left;
   font-family: var(--ui-font); font-size: 13px; line-height: 1.35; color: var(--ink);
   padding: 3px 6px; border-radius: 6px; cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .outline-row:hover { background: var(--accent-soft); }
 .outline-row.cur { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+/* The twisty keeps its 12px slot even on a heading with nothing under it, so the titles of
+   siblings line up whether or not they have subsections — same deal as the file tree. */
+.outline-twisty {
+  flex: 0 0 12px; width: 12px; text-align: center;
+  font-size: 9px; line-height: 1; color: var(--muted); border-radius: 3px;
+}
+.outline-row.cur .outline-twisty { color: var(--accent-ink); }
+.outline-twisty:hover:not(:empty) { background: rgba(0,0,0,.14); }
+.outline-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .outline-empty { padding: 8px 8px 10px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
 
 /* ---------- Editor ---------- */
