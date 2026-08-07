@@ -7,6 +7,105 @@
 
 ---
 
+## 2026-08-07 (bis) — Giro 17: il salto al collega arriva alla sua riga, non solo al suo file ✅ (check di Tommy OK)
+
+**Tommy chiede una funzione che c'era già.** «Se schiaccio sull'icona di un collaboratore mi porta
+solo al file, mi piacerebbe che mi portasse alla sua posizione.» Ma il salto del giro 8 fa
+esattamente quello — e nel giro 8 era stato **misurato** (offset 18, column-aware). Quindi non era
+una funzione mancante: era un **difetto**. La cosa utile del giro è tutta qui, e vale più della
+correzione: quando quel che chiedi esiste già, la domanda giusta non è «come lo costruisco» ma
+«perché non funziona».
+
+### La misura che ha chiuso la questione in un colpo
+
+Due client sullo stesso progetto, tutti e due su `main.tex`, **prima** di toccare niente:
+
+```
+{ activeFile: "main.tex", hasCursor: false, cursorFile: null }
+{ activeFile: "main.tex", hasCursor: false, cursorFile: null }
+```
+
+Nessuno dei due pubblicava una posizione. Cliccato dentro l'editor di uno: compare
+`cursorFile: "main.tex@667"`.
+
+**La causa.** yCollab aggiorna il campo `cursor` solo sotto
+`view.hasFocus && view.dom.ownerDocument.hasFocus()` — il fuoco del **sistema operativo**, non
+quello del documento. Un collega che non ha mai cliccato dentro il testo, o la cui finestra sta
+dietro un'altra, non pubblica posizione **affatto**. `peerLocation` si ritrova `index` a `null`,
+e `gotoPeer` può solo aprire il file. Il sintomo di Tommy, esattamente.
+
+**La seconda pista, provata e scartata come causa autonoma.** Il campo `cursor` è uno solo per
+client, non uno per file: dopo un cambio file resta agganciato al Y.Text **precedente**, e il
+controllo `abs.type === filesMap.get(file)` — giustamente — lo butta via. Sembrava un secondo
+difetto indipendente; misurandolo non lo è. Con il fuoco, il `view.focus()` in fondo a `openFile`
+ripubblica subito sul file nuovo (`sezioni/metodi.tex@0`). Morde **solo** senza fuoco, cioè è la
+stessa causa vista da un'altra angolazione. Vale la pena averlo scritto: la correzione la copre
+comunque, ma se avessi corretto *quella* avrei corretto il sintomo sbagliato.
+
+### La correzione: un campo nostro, senza cancello e con l'etichetta del file
+
+`caret: { file, rel }`, pubblicato da noi. Due proprietà, e sono tutte e due il punto:
+
+- **Nessun vincolo di fuoco.** È quel che rende il salto affidabile invece che fortunato.
+- **Si porta dietro il file a cui appartiene.** Una posizione relativa risolta contro il Y.Text
+  sbagliato non dà un errore: dà un carattere, e quel carattere non c'entra niente con dove sta
+  la persona. Un salto che atterra con sicurezza nel posto sbagliato è peggio di uno che non
+  atterra — così `openFile` che cambia file non può invalidare quel che ha pubblicato l'editor
+  di prima.
+
+**Le decisioni prese scrivendolo**
+
+- **Posizione relativa Yjs, non un numero di riga.** Stessa scelta di yCollab e per la stessa
+  ragione: regge le modifiche concorrenti, quindi punta ancora allo stesso carattere quando un
+  collega la decodifica un minuto dopo. Un indice assoluto sarebbe stato più semplice da leggere
+  nel debug e sbagliato appena qualcun altro scrive due righe più su.
+- **Si pubblica su `selectionSet`, non su `docChanged`.** Se sto fermo mentre un altro scrive, la
+  mia posizione relativa **è già** lo stesso carattere: ripubblicare manderebbe traffico di
+  awareness a ogni battuta di ogni collega per non dire niente di nuovo. (È la stessa prudenza che
+  yCollab si compra con `compareRelativePositions`.)
+- **Quello di yCollab resta come ripiego** (`own || st.cursor…`). Costa un `||` ed è quel che
+  pubblica ancora un client rimasto su una versione vecchia — durante un rilascio non sono tutti
+  aggiornati nello stesso istante.
+- **All'apertura di un file si pubblica l'indice 0.** Deciso guardandolo: un collega che ha appena
+  aperto un file e non si è mosso adesso ti porta **all'inizio del suo file** invece che «nel file,
+  chissà dove». Non è una posizione vera, è la più onesta che abbiamo. Scelta condivisa da Tommy.
+- **Azzerato quando non c'è niente di aperto** (e sui file binari, che un Y.Text non ce l'hanno).
+
+### Verificato
+
+(dev :3000, console **pulita** prima e dopo il ricaricamento, `test/smoke.sh` **31/31** — lato
+server non è stata toccata una riga)
+
+- **Ricostruita la condizione rotta di proposito**: un client come «Paolo Rossi» su
+  `sezioni/metodi.tex` all'offset **426**, col suo `cursor` di yCollab forzato a `null`. Dall'altro
+  client, fermo su `main.tex`, **click vero sull'avatar** → `open: "sezioni/metodi.tex"`,
+  `landedAt: 426`, riga attiva `\subsubsection{Duplicati}`. Cambio di file **e** carattere giusto,
+  con `hasCursor: false` per tutto il tempo: a portare la posizione è stato solo il campo nuovo.
+- **Il campo esiste anche senza fuoco**: due client appena caricati, `hasFocus: false`,
+  `hasCursor: false` — e `caretResolved: "sezioni/metodi.tex@0"` su entrambi. È esattamente il caso
+  che prima dava il salto monco.
+- **Il cambio file lo segue**: aperto un altro file, `caret` si sposta con lui.
+- Sonda di diagnosi (`window.__diag`) **rimossa**, sintassi ricontrollata
+  (`node --input-type=module --check`).
+- Nessun progetto modificato: la prova è girata su «Outline test — sezioni annidate» muovendo solo
+  cursori e cambiando file, **senza scrivere una battuta**.
+
+**Nota di ambiente, che corregge una convinzione vecchia**: sull'host **Node c'è**
+(`/opt/homebrew/bin/node`, v26.5.0). Per un controllo di sintassi non serve tirare su un container.
+
+**Resta fuori di proposito**, come nel giro 8: il salto non *segue* il collega mentre si muove — è
+un salto, non un follow-mode. E l'atterraggio non lampeggia: se la riga di arrivo dovesse risultare
+difficile da individuare a occhio, è un lavoro suo.
+
+**In coda restano**, dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL
+per-progetto), **template** (Step G, da disegnare prima) e la questione **temi/`stex` vs Lezer**
+parcheggiata nel giro 16.
+
+⚠️ **Non è live**: `public/` soltanto, ma serve comunque il pull+rebuild sul VPS (Albi) — fermo a
+`1541753`, quindi gli mancano i giri dall'8 in poi, questo compreso.
+
+---
+
 ## 2026-08-07 — Giro 16: l'outline si richiude a tendina, e il titolo va in mezzo ✅ (check di Tommy OK)
 
 **Tre modifiche chieste da Tommy guardando l'app, più una domanda che ha una risposta e nessun
