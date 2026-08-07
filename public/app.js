@@ -397,6 +397,7 @@ function onFilesChanged() {
     closeSpellMenu();
     refreshOutline();
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
+    clearCaret();                                          // nothing open → nowhere to jump to
   }
   renderTabs();
   if (openTabs.length !== had) saveTabs();
@@ -704,6 +705,7 @@ function closeTab(path) {
     closeSpellMenu();
     refreshOutline();                                      // nothing open → nothing to outline
     try { provider.awareness.setLocalStateField("activeFile", null); } catch {}
+    clearCaret();                                          // nothing open → nowhere to jump to
     renderTree();
   }
   renderTabs();
@@ -742,6 +744,11 @@ function openFile(path) {
         ...outlineExtensions(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some((tr) => tr.isUserEvent("input") || tr.isUserEvent("delete"))) noteLocalEdit();
+          // Every move of my caret — a click, an arrow, a keystroke — refreshes where a
+          // colleague's jump would land. Only on `selectionSet`: when I stand still while
+          // someone else types, my relative position is still the same character, so there'd
+          // be nothing to say.
+          if (u.selectionSet) publishCaret(path, val, u.state.selection.main.head);
         }),
       ],
     });
@@ -752,6 +759,9 @@ function openFile(path) {
   refreshOutline();                  // the outline is of the OPEN file, so it changes with it
   view.scrollDOM.addEventListener("scroll", repositionOverlays, { passive: true });
   try { provider.awareness.setLocalStateField("activeFile", path); } catch {}
+  // The opening position, before I've touched anything: a colleague clicking my avatar now
+  // lands at the top of the file I'm in, not just "in the file somewhere".
+  if (!isBinaryVal(val)) publishCaret(path, val, 0); else clearCaret();
   renderTree();
   renderTabs();
   saveTabs();
@@ -2923,7 +2933,7 @@ function errorScreen(msg) {
 }
 
 // ---------- Real-time connection status + presence ----------
-// Peers publish { user:{id,name,color}, activeFile } into awareness (see init + openFile);
+// Peers publish { user:{id,name,color}, activeFile, caret } into awareness (see init + openFile);
 // this is the read side. yCollab already draws named cursors INSIDE the open file, so what
 // these avatars add is everything you can't see from there: who else is on the project at
 // all, and which file each of them is sitting in.
@@ -3009,10 +3019,29 @@ function onAwarenessChange() {
   renderPresence(peers);
   renderTree();                              // file rows carry "who's in here" markers
 }
-// Where is this person right now? Their active file, plus their cursor when awareness
-// carries one (yCollab publishes it as Yjs relative positions — they survive concurrent
-// edits by design, so decoding against the live doc lands on the character they're on,
-// not on a stale offset). Someone with several tabs open: the tab with a cursor wins.
+// My caret, published for my colleagues' jump. It exists because yCollab's own `cursor`
+// field is only maintained while the window has the focus of the OPERATING SYSTEM — in the
+// vendored bundle: `view.hasFocus && view.dom.ownerDocument.hasFocus()`. Someone who never
+// clicked into the text, or whose window sits behind another one, publishes no cursor at
+// all, and the jump could then only open the file — which is exactly the defect Tommy hit.
+// (Measured on dev: two clients on `main.tex`, `cursor` absent on both until one was
+// clicked into.) So: no focus gate here, and the field carries the FILE it belongs to —
+// a relative position resolved against the wrong Y.Text would land on a character that has
+// nothing to do with where the person is, and `openFile` switching file cannot invalidate
+// what the old file's editor published.
+function publishCaret(path, ytext, index) {
+  if (!provider || !ytext) return;
+  // Relative position, like yCollab's: it survives everyone else's concurrent edits, so it
+  // still points at the same character when a colleague decodes it a minute later.
+  try {
+    provider.awareness.setLocalStateField("caret", { file: path, rel: Y.createRelativePositionFromTypeIndex(ytext, index) });
+  } catch {}
+}
+function clearCaret() {
+  try { provider.awareness.setLocalStateField("caret", null); } catch {}
+}
+// Where is this person right now? Their active file, plus their caret. Someone with several
+// tabs open: the tab with a caret wins.
 function peerLocation(personKey) {
   if (!provider) return null;
   let best = null;
@@ -3022,7 +3051,10 @@ function peerLocation(personKey) {
     const file = st.activeFile;
     if (!file || !hasPath(file)) continue;
     let index = null;
-    const rel = st.cursor && (st.cursor.head || st.cursor.anchor);
+    // Ours first — it's the one that's always there. yCollab's `cursor` stays as the fallback:
+    // it's what a client running an older build still publishes, and it costs one `||`.
+    const own = st.caret && st.caret.file === file ? st.caret.rel : null;
+    const rel = own || (st.cursor && (st.cursor.head || st.cursor.anchor));
     if (rel && !isBinaryVal(filesMap.get(file))) {
       try {
         const abs = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(rel), ydoc);
