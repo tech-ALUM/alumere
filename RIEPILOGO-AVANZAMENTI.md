@@ -7,6 +7,112 @@
 
 ---
 
+## 2026-08-07 — Giro 16: l'outline si richiude a tendina, e il titolo va in mezzo ✅ (check di Tommy OK)
+
+**Tre modifiche chieste da Tommy guardando l'app, più una domanda che ha una risposta e nessun
+lavoro (per ora).**
+
+### Le frecce per singola voce — proprio quel che il giro 15 aveva escluso di proposito
+
+Il giro scorso finiva dicendo «le frecce di richiusura **per singola voce** non ci sono, di
+proposito: la testata richiude tutto, che è quel che chiedeva il punto 5». Adesso ci sono. **La
+freccia richiude, il resto della riga salta** — la stessa divisione che ha una cartella
+nell'albero dei file, e per la stessa ragione: sono due gesti diversi sullo stesso oggetto.
+
+**Le decisioni prese scrivendolo**
+
+- **Una piega si ricorda per PERCORSO nel documento, non per numero di riga.** Il numero di riga
+  è la scelta ovvia e sbagliata: l'outline si ricostruisce a ogni modifica, e ogni riga che
+  scrivi sposta i numeri di tutte quelle sotto — la piega si aprirebbe da sola sotto le dita.
+  La chiave è invece la catena dei titoli dall'alto (`Front matter → Alpha`), che non si muove
+  mentre scrivi altrove. **Due fratelli con lo stesso titolo** hanno un contatore, altrimenti
+  chiuderne uno chiuderebbe anche l'altro — provato apposta con due capitoli identici parola per
+  parola. Il giunto della chiave è un **NUL**, l'unico carattere che un titolo non può contenere:
+  nessun titolo può così contraffare la chiave di un altro ramo.
+- **Chiudere non spegne il «sei qui».** Col cursore dentro una sezione richiusa si illumina
+  **l'antenato visibile più vicino**. L'alternativa — nessuna riga accesa — sarebbe stata una
+  risposta peggiore della domanda: il pannello serve a dirti dove sei, e chiudere un ramo non ti
+  sposta.
+- **Le pieghe vivono quanto la sessione, non quanto una preferenza.** Sopravvivono al ri-parse e
+  a un giro su un altro tab e ritorno (la chiave include il file), si azzerano al reload. Stessa
+  posizione delle cartelle dell'albero: dicono dove stai guardando adesso, non qualcosa da
+  ricordare la settimana prossima.
+- **`drawOutline()` staccata da `refreshOutline()`.** Chiudere una freccia non cambia il
+  documento, solo quali titoli sono a schermo: ri-analizzare il file a ogni click sarebbe stato
+  sprecare la scansione per niente.
+- **La freccia tiene il suo posto anche su una foglia** (slot vuoto da 12px), altrimenti i titoli
+  dei fratelli si disallineerebbero a seconda che abbiano o no sottosezioni.
+
+### La barra in alto: il logo È il link, il nome del progetto è il titolo
+
+Via la freccia `←`: **il logo + il nome sono il link** alla lista progetti — un bersaglio solo
+invece di una freccina appiccicata a una decorazione che sembrava cliccabile e non lo era. E il
+nome del progetto esce dal blocco del marchio per diventare la **colonna centrale** della barra
+(15px, grassetto, senza più il divisorio verticale che lo teneva attaccato al logo).
+
+**Il quasi-difetto trovato misurando, e la riga di disegno che ha cambiato.** La prima versione
+aveva `minmax(0,1fr)` su tutti e due i fianchi: due colonne uguali, che è esattamente ciò che
+rende il centro *il centro della finestra* e non semplicemente «in mezzo ai due». Ma uguali vuol
+dire che il lato largo non può prendere in prestito dal lato stretto — e a 560px la toolbar,
+allineata a destra dentro una colonna più corta del suo contenuto, **sbordava di 11px sopra il
+titolo**. Ora il fianco destro ha `min-content`: non può mai essere strizzato sotto quel che
+contiene. Il centro invece può ridursi a zero, così su una finestra stretta è il **nome** a
+cedere — ha i puntini di sospensione apposta — e la barra scivola fuori centro invece di
+sovrapporsi a se stessa. Il centraggio perfetto e il non-sovrapporsi non possono valere insieme
+a ogni larghezza: questa è la scelta di quale dei due mollare per primo.
+
+**Misurato**: a 1280px le colonne escono `532.32 / 167.35 / 532.33` — il centro del nome cade a
+640, cioè metà barra esatta. A 900px idem. A 560px nessuna sovrapposizione.
+
+**Verificato** (dev :3000, chiaro **e** scuro, console **pulita** su caricamento fresco,
+`test/smoke.sh` **31/31** — niente di nuovo lato server)
+- **Sei livelli annidati**: freccia su ognuno tranne l'ultimo; `Beta`, senza figli, non ce l'ha.
+- **Due `\section{Alpha}` sotto due `\part` diversi**: chiusa la prima, la seconda resta aperta.
+- **Cursore a riga 10** — dentro `Deep leaf`, dentro `Alpha` chiusa — si accende `Alpha`, e solo
+  quella (verificato sull'indice della riga, non sull'etichetta: i titoli erano omonimi).
+- **Click sull'etichetta** di `Back matter` → cursore a riga 19, riga giusta, e la piega su
+  `Alpha` regge.
+- **Scritto del testo** con una piega chiusa: regge al ri-parse. **`main.tex` → `second.tex` →
+  ritorno**: regge, e l'outline di `second.tex` non ne sapeva nulla.
+- **Click sul logo** → lista progetti. **Menù ▾** centrato sotto il bottone; **Rename** apre il
+  campo inline centrato e dimensionato come il titolo, Esc annulla.
+- Progetto usa-e-getta del mio collaudo **eliminato**, cartella sparita da disco. Ne è rimasto uno
+  **apposta**: «Outline test — sezioni annidate», che ho preparato per il check di Tommy (sei
+  livelli, fratelli omonimi, titoli difficili, un file di sole `\subsection`, un `.bib`; `report`
+  senza `hyperref` né `inputenc` — con XeLaTeX il primo si lamenta della matematica nei titoli e
+  il secondo di essere inutile, così il log resta a **0 warning**). Da cestinare quando non serve
+  più.
+
+### La domanda sui temi: perché dracula da noi non è il dracula di Overleaf — **parcheggiata**
+
+Tommy ha affiancato lo stesso tema nei due editor. **Non è il tema**: la tavolozza è identica
+(esadecimali ufficiali di Dracula; sfondo, cursore e selezione combaciano). Quel che cambia è
+**chi decide quale pezzo di testo prende quale colore**.
+
+- Noi usiamo **`stex`**, il vecchio tokenizzatore di CodeMirror 5 riportato: uno *scanner*, non un
+  parser. Non sa cos'è un ambiente, cos'è un titolo, dove comincia la matematica. Overleaf ha
+  scritto **una grammatica LaTeX vera** (Lezer) — ed è la stessa cosa che gli dà le frecce di
+  code folding sui `\begin`…`\end` che da noi non ci sono.
+- **Misurato**: da noi il contenuto di `$…$` non è colorato affatto (solo i `$`), il nome
+  d'ambiente è ciano dritto invece che verde corsivo, e c'è un'incoerenza che tradisce la causa —
+  in `$e^{i\pi} + 1 = 0$` l'`1` e lo `0` sono **viola** (numeri), ma in `\frac{1}{3}` l'`1` e il
+  `3` sono **ciano** (atom). Stesso carattere, due colori, per un motivo che non c'entra col
+  significato.
+- **Difetto di nome, non solo di parser**: `--ed-tok-math` **non colora la matematica** — colora
+  il tag *atom*, cioè i nomi di ambiente e di pacchetto. Vale per tutti e dieci i temi.
+- **Decisione di Tommy: lasciata così, ci si torna dopo.** Le due strade restano: sistemare la
+  mappa dei tag (poco lavoro, tetto basso — solo quel che `stex` sa distinguere) oppure
+  sostituire `stex` con una grammatica Lezer (giro suo: nuova dipendenza nel bundle vendorizzato
+  e mappa dei colori riscritta).
+
+**In coda restano**, dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL
+per-progetto) e **template** (Step G, da disegnare prima).
+
+⚠️ **Non è live**: `public/` soltanto, ma serve comunque il pull+rebuild sul VPS (Albi) — fermo a
+`1541753`, quindi gli mancano i giri dall'8 in poi, questo compreso.
+
+---
+
 ## 2026-08-05 (sexies) — Giro 15: l'outline delle sezioni, sotto l'albero ✅ (check di Tommy OK)
 
 **Punto 5, l'ultimo della lista di Tommy.** Sotto il file tree, alla base della stessa colonna: un
