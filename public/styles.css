@@ -85,6 +85,21 @@ button { font-family: inherit; cursor: pointer; }
   position: relative;   /* the presence tooltips hang below the bar, over the workspace */
   z-index: 5;
 }
+/* Editor bar (giro 16): three columns instead of two ends, so the project name sits in the
+   MIDDLE OF THE WINDOW and stays there however crowded the right side gets — two equal
+   1fr flanks is what makes it the centre and not merely "between the two".
+   The floors are the interesting part. The right flank gets min-content, so the toolbar
+   can never be squeezed narrower than what's in it and spill over the title; the middle
+   can shrink to nothing, so on a cramped window the NAME gives way (it has an ellipsis
+   for exactly this) and the bar drifts off-centre instead of overlapping itself. */
+.editor-topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(min-content, 1fr);
+  gap: 10px;
+}
+.editor-topbar .brand { justify-self: start; }
+.editor-topbar .toolbar { justify-self: end; }
+
 .brand { display: flex; align-items: center; gap: 9px; }
 .logo {
   width: 28px; height: 28px; border-radius: 7px;
@@ -611,31 +626,36 @@ body.dragging-v { cursor: row-resize; user-select: none; }
 .small { font-size: 11px; }
 
 /* ---------- Editor header additions ---------- */
-.brand .backlink {
-  color: #eef4f9; text-decoration: none; font-size: 18px; line-height: 1;
-  opacity: .8; padding: 0 4px; border-radius: 6px;
+/* The logo+name ARE the link home (giro 16) — the ← that used to sit beside them is gone.
+   The negative margin lets the hover plate breathe around the mark without pushing the
+   whole brand inwards, so the bar looks the same at rest as it did before. */
+.brand.brandlink {
+  color: inherit; text-decoration: none;
+  padding: 3px 8px; margin-left: -8px; border-radius: 9px;
 }
-.brand .backlink:hover { opacity: 1; background: rgba(255,255,255,.12); }
-/* Project name = a click-to-open menu (rename, and room for more later). The button
-   carries the divider + hover; the inner span is the ellipsised name. */
-.projname-menu { margin-left: 8px; }
+.brand.brandlink:hover { background: rgba(255,255,255,.12); }
+.brand.brandlink:focus-visible { outline: 2px solid rgba(255,255,255,.55); outline-offset: 1px; }
+/* Project name = a click-to-open menu (rename, and room for more later). Centred in the
+   bar and sized like a title; the inner span is the ellipsised name. */
+.projname-menu { justify-self: center; min-width: 0; }
 .projname-btn {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 300px;
-  padding: 3px 8px 3px 10px; font: inherit; font-size: 13px; color: #cddce8;
-  background: transparent; border: 0; border-left: 1px solid rgba(255,255,255,.18);
-  border-radius: 0 7px 7px 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 4px 10px; font: inherit; font-size: 15px; font-weight: 700; color: #eef4f9;
+  background: transparent; border: 0; border-radius: 8px; cursor: pointer;
 }
 .projname-btn:hover { background: rgba(255,255,255,.12); }
 .projname-btn[hidden] { display: none; }   /* author display: above would otherwise beat [hidden] */
-.brand .projname {
-  max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.projname {
+  flex: 0 1 auto; min-width: 0;            /* min-width:auto would refuse to shrink, and no ellipsis */
+  max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.projname-btn .caret { font-size: 10px; opacity: .7; }
+.projname-btn .caret { font-size: 10px; opacity: .7; font-weight: 400; }
 .projname-input {
-  margin-left: 8px; width: 240px; padding: 3px 8px; font: inherit; font-size: 13px;
-  color: var(--ink); background: #fff; border: 1px solid var(--accent); border-radius: 7px;
+  width: 260px; padding: 4px 9px; font: inherit; font-size: 15px; font-weight: 700;
+  color: var(--ink); background: #fff; border: 1px solid var(--accent); border-radius: 8px;
 }
-.projname-menu .menu-pop { left: 0; right: auto; min-width: 200px; }
+/* The popup hangs from the middle of the button, since the button is now itself centred. */
+.projname-menu .menu-pop { left: 50%; right: auto; transform: translateX(-50%); min-width: 200px; }
 
 /* ---------- Home (landing) page ---------- */
 /* Two-pane, Overleaf-style: a full-height left sidebar (primary action + nav; tags and

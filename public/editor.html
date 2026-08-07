@@ -9,18 +9,22 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <a class="backlink" href="index.html" title="Back to projects">←</a>
+  <header class="topbar editor-topbar">
+    <!-- The logo IS the way back to the projects (giro 16): one target instead of an arrow
+         standing next to a decoration that looked clickable and wasn't. -->
+    <a class="brand brandlink" href="index.html" title="Back to your projects">
       <span class="logo">∑</span>
       <span class="name">Alum<span class="thin">ère</span></span>
-      <div class="menu projname-menu" id="projMenu">
-        <button class="projname-btn" id="projNameBtn" aria-haspopup="true" title="Project name — click to rename">
-          <span class="projname" id="projName">Project</span><span class="caret">▾</span>
-        </button>
-        <div class="menu-pop" hidden>
-          <button class="menu-item" id="projRename" type="button"><span class="menu-ic">✎</span> Rename project</button>
-        </div>
+    </a>
+
+    <!-- The project name is the MIDDLE column of the bar: it names what you're looking at,
+         so it reads as a title rather than as an appendix of the logo. -->
+    <div class="menu projname-menu" id="projMenu">
+      <button class="projname-btn" id="projNameBtn" aria-haspopup="true" title="Project name — click to rename">
+        <span class="projname" id="projName">Project</span><span class="caret">▾</span>
+      </button>
+      <div class="menu-pop" hidden>
+        <button class="menu-item" id="projRename" type="button"><span class="menu-ic">✎</span> Rename project</button>
       </div>
     </div>
     <!-- Compile, its status, History, Download and the log moved into the PDF pane's own
