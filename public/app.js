@@ -78,8 +78,9 @@ const GREEK = ["alpha", "beta", "gamma", "delta", "epsilon", "theta", "lambda", 
 // ---------- Collaboration state (Yjs + Hocuspocus) ----------
 let ydoc = null, provider = null, filesMap = null, metaMap = null, commentsMap = null;
 let Y = null, HocuspocusProvider = null, yCollab = null, yUndoManagerKeymap = null;
+let IndexeddbPersistence = null, localStore = null, localLoaded = false;
 let me = { id: "anon", name: "Anonimo" };
-let booted = false;   // becomes true after the first successful sync (bootstrap once)
+let booted = false;   // becomes true after the first bootstrap (server sync, or local copy when offline)
 
 // Deterministic per-user cursor color (same person → same color). From the M0 spike.
 function colorFor(seed) {
@@ -3129,7 +3130,23 @@ function noteNotSynced() {
   if (!offlineTimer) offlineTimer = setTimeout(() => {
     offlineTimer = null;
     setConnState("offline", "○ offline");
+    bootFromLocal();
   }, OFFLINE_GRACE_MS);
+}
+
+// Reloading while offline used to mean a blank editor forever: `booted` could only be
+// reached through the server. Now the browser's own copy can bootstrap it — but ONLY once
+// we've given up on the server, because the server's state is the one worth waiting for
+// (it has everyone else's work; this copy has just ours). Either side can be the last to
+// arrive, so both the local load and the offline timer try.
+function bootFromLocal() {
+  if (booted || !localLoaded) return;
+  if (document.body.dataset.conn !== "offline") return;
+  // Nothing cached for this project (first visit from this browser). Booting an empty tree
+  // would claim the project has no files — leave the offline banner up instead, and let the
+  // real boot happen when the server answers.
+  if (filesMap.size === 0) return;
+  bootUI({ offline: true });
 }
 
 // Self-heal (giro 7): before the server persisted the doc's BINARY Yjs state, a restart
@@ -3152,41 +3169,55 @@ function dedupSharedArrays() {
   prune(dictArr, (w) => (typeof w === "string" ? w : null));
 }
 
+// Open-time compile, but only when it would produce something new: wait for the cached
+// build (it shows instantly), and recompile just if it's stale — or absent. Sequencing
+// through the promise also means cache and compile can never race each other's render.
+let openCompilePending = false;      // booted offline: owed a compile at the first sync
+function openTimeCompile() {
+  Promise.resolve(cachedBuildPromise).then((cached) => {
+    if (!compileStarted && !(cached && cached.fresh)) compile();
+  });
+}
+
+// Paints the UI from whatever is in the doc right now. Called once, from the first source
+// that can supply a doc: the server normally, or — when it's unreachable — the browser's
+// local copy (see bootFromLocal).
+function bootUI({ offline = false } = {}) {
+  booted = true;
+  renderTree();
+  const files = flattenForCompile();
+  const saved = loadSavedTabs();
+  let opened = false;
+  if (saved && saved.open.length) {
+    openTabs = saved.open.filter(hasPath);                 // restore only files that still exist
+    const active = (saved.active && hasPath(saved.active)) ? saved.active : (openTabs[0] || null);
+    if (active) { openFile(active); opened = true; }       // active is already in openTabs → order kept
+  }
+  if (!opened) {
+    const mainPath = detectMain(files);
+    if (hasPath(mainPath)) openFile(mainPath);
+    else if (files[0]) openFile(files[0].path);
+    else renderTabs();                                     // empty project → show the empty state
+  }
+  // Giro 5: the seeded comments/chat arrived before `booted`, so their observers were
+  // silent — paint the initial state once. History is never "unread": the badge starts
+  // counting from messages that arrive live.
+  updateRailBadges();
+  renderChat();
+  // Compiling is a server round-trip: booting offline it could only fail, so hold it until
+  // the first sync instead of opening on an error nobody can act on.
+  if (offline) openCompilePending = true;
+  else openTimeCompile();
+}
+
 // Runs on every successful (re)sync; bootstraps the UI once the seeded files arrive.
 function onSynced() {
   if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
   setConnState("online", "● online");
   dedupSharedArrays();           // legacy duplicates die here (and the deletes propagate)
   presenceSig = "";              // a reconnect may have emptied/changed the room → force one redraw
-  if (!booted) {
-    booted = true;
-    renderTree();
-    const files = flattenForCompile();
-    const saved = loadSavedTabs();
-    let opened = false;
-    if (saved && saved.open.length) {
-      openTabs = saved.open.filter(hasPath);                 // restore only files that still exist
-      const active = (saved.active && hasPath(saved.active)) ? saved.active : (openTabs[0] || null);
-      if (active) { openFile(active); opened = true; }       // active is already in openTabs → order kept
-    }
-    if (!opened) {
-      const mainPath = detectMain(files);
-      if (hasPath(mainPath)) openFile(mainPath);
-      else if (files[0]) openFile(files[0].path);
-      else renderTabs();                                     // empty project → show the empty state
-    }
-    // Giro 5: the seeded comments/chat arrived before `booted`, so their observers were
-    // silent — paint the initial state once. History is never "unread": the badge starts
-    // counting from messages that arrive live.
-    updateRailBadges();
-    renderChat();
-    // Open-time compile, but only when it would produce something new: wait for the cached
-    // build (it shows instantly), and recompile just if it's stale — or absent. Sequencing
-    // through the promise also means cache and compile can never race each other's render.
-    Promise.resolve(cachedBuildPromise).then((cached) => {
-      if (!compileStarted && !(cached && cached.fresh)) compile();
-    });
-  }
+  if (!booted) bootUI();
+  else if (openCompilePending) { openCompilePending = false; openTimeCompile(); }
   onAwarenessChange();           // booted by now, so this actually paints the strip + markers
 }
 
@@ -3685,7 +3716,7 @@ async function init() {
     editorHost.innerHTML = `<div style="padding:16px;font:13px/1.5 'Inter',sans-serif;color:#5a3a06;background:#fff3cd">The real-time bundle (<code>window.YCOLLAB</code>) isn't loaded. Rebuild <code>public/vendor/codemirror.js</code> with <code>npm run build:client</code> and reload.</div>`;
     return;
   }
-  ({ Y, HocuspocusProvider, yCollab, yUndoManagerKeymap } = window.YCOLLAB);
+  ({ Y, HocuspocusProvider, yCollab, yUndoManagerKeymap, IndexeddbPersistence } = window.YCOLLAB);
   CM = await loadCodeMirror();
 
   // Shared doc for THIS project (room = project id), same port, path /collab.
@@ -3700,6 +3731,18 @@ async function init() {
   fetch("/api/users").then((r) => r.json()).then((d) => {
     if (d && d.ok) { roster = d.users || []; rosterById = new Map(roster.map((u) => [u.id, u])); }
   }).catch(() => {});
+  // Local copy of the doc, in this browser's IndexedDB. Attached BEFORE the provider so
+  // anything written offline is already in the doc when the server's state lands on top of
+  // it — the merge is a CRDT merge, so ours and theirs both survive.
+  //
+  // It is a cache, never the source of truth: the server owns the project, and this copy
+  // only ever bootstraps the UI when the server can't be reached (bootFromLocal). Guarded
+  // like the rest of the collab pieces — an older bundle without it just means we're back
+  // to the previous behaviour, not a broken editor.
+  if (IndexeddbPersistence) {
+    localStore = new IndexeddbPersistence(`alumere:${PROJECT_ID}`, ydoc);
+    localStore.on("synced", () => { localLoaded = true; bootFromLocal(); });
+  }
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
   provider = new HocuspocusProvider({ url: `${wsProto}://${location.host}/collab`, name: PROJECT_ID, document: ydoc });
 

@@ -1413,6 +1413,16 @@ async function attachCollab(httpServer) {
       const words = await readDict(documentName);
       if (words.length) document.transact(() => dictArr.push(words));
     }
+    // Pin the seed's Yjs state NOW, not at the first store. Seeding builds brand-new items
+    // with brand-new IDs, so two seedings of the same files/ produce two rival sets under the
+    // same map keys — and a Y.Map resolves that by keeping one and dropping the other. That
+    // used to be invisible (identical content either way). It stopped being invisible once
+    // clients kept their own copy in IndexedDB: a project opened, never edited, then reopened
+    // after a restart would seed afresh and could drop the copy holding someone's offline
+    // work. Writing it here means every later load restores these same items, so the merge is
+    // idempotent whatever the client is holding.
+    try { await writeFile(ydocStatePath(documentName), Buffer.from(Y.encodeStateAsUpdate(document))); }
+    catch (e) { console.warn(`[alumere] ydoc seed state store failed for "${documentName}": ${e.message}`); }
     console.log(`[alumere] collab loaded "${documentName}" (${files.length} files)`);
     // History: capture the on-disk starting point the first time this project is opened.
     await ensureBaseline(documentName, files, meta.createdBy || SYSTEM_USER)

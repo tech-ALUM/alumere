@@ -16,6 +16,10 @@ import { tags } from "@lezer/highlight";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+// Local copy of the doc in the browser's IndexedDB. The CRDT already merges work written
+// while the socket is down, but until now that work lived only in the tab's memory — so
+// reloading while offline (the reflex when something looks stuck) threw it away.
+import { IndexeddbPersistence } from "y-indexeddb";
 
 window.CM6 = {
   view: { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap, Decoration, WidgetType, ViewPlugin },
@@ -28,4 +32,4 @@ window.CM6 = {
   tags,
 };
 
-window.YCOLLAB = { Y, HocuspocusProvider, yCollab, yUndoManagerKeymap };
+window.YCOLLAB = { Y, HocuspocusProvider, yCollab, yUndoManagerKeymap, IndexeddbPersistence };
