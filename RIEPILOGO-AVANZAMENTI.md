@@ -7,6 +7,112 @@
 
 ---
 
+## 2026-08-08 — Giro 18: il lavoro scritto a linea caduta non muore più col tab ✅ (check di Tommy OK)
+
+**Il giro non nasce da una richiesta, nasce da una domanda.** «Ogni quanto viene fatto
+l'autosalvataggio?» — e dietro c'era il motivo vero, detto subito dopo: su Overleaf capita che
+cada la connessione e resti del lavoro non salvato. La risposta letta dal codice era
+`debounce: 2000, maxDebounce: 10000`, e Tommy ne ha tratto la conclusione ragionevole:
+«al massimo perdo 10 secondi».
+
+**Non era così, ed è tutto il giro.** Quei numeri misurano un'altra distanza: quanto il *disco
+del server* può restare indietro rispetto a quel che il server *ha già ricevuto*. Quando la linea
+cade il server non riceve niente, quindi quel limite non descrive nessuna delle tue perdite.
+Sono due guasti diversi e vale la pena tenerli separati:
+
+| Guasto | Quanto perdi |
+|---|---|
+| Crasha il **server** | ≤ 10s (ricevuto ma non ancora scritto) |
+| Cade la **tua** connessione e ricarichi | tutto dall'ultimo sync — **nessun limite** |
+
+Ultimo sync alle 15:00, la linea cade, continui a scrivere, alle 15:25 ricarichi: venticinque
+minuti. **La lezione da tenere**: un numero rassicurante trovato nel codice risponde alla domanda
+che il codice si stava facendo, non necessariamente a quella di chi la legge. Chiedere «questo
+numero misura la distanza che mi preoccupa?» costa una riga di ragionamento e qui separava una
+risposta giusta da una falsamente tranquillizzante.
+
+### Quel che già ci proteggeva, e il buco che restava
+
+La difesa non è mai stata il debounce: è il **CRDT**. Da scollegato le modifiche continuano ad
+applicarsi al Y.Doc locale, il provider ritenta da solo, e alla riconnessione Yjs **fonde** il tuo
+lavoro con quello degli altri — nessuna finestra di conflitto. È il punto in cui siamo
+strutturalmente meglio di Overleaf, che con l'OT quella fusione non la dà allo stesso modo. Il
+problema di partenza di Tommy era quindi già risolto **nel caso normale**.
+
+Il buco era stretto e cattivo: quelle modifiche vivevano **solo nella memoria del tab**. E la
+fascia di offline rassicurava — correttamente — che non stavi perdendo niente, senza dire che
+l'unica mossa capace di smentirla era proprio quella che viene istintiva quando qualcosa sembra
+bloccato: ricaricare.
+
+### La correzione: `y-indexeddb`, più due cose che non erano nell'import
+
+Il doc vive anche nell'IndexedDB del browser. Attaccato **prima** del provider, così quel che hai
+scritto offline è già nel doc quando lo stato del server ci atterra sopra: la fusione è una
+fusione CRDT, sopravvivono tutti e due. È una cache, mai la fonte di verità.
+
+**Le decisioni prese scrivendolo**
+
+- **Il boot non poteva avvenire da offline, e questo era il lavoro vero.** `booted` si raggiungeva
+  solo da `onSynced`: ricaricare senza server dava un editor bianco per sempre. Con la sola
+  aggiunta della persistenza il doc sarebbe stato pieno e lo schermo vuoto — la modifica sarebbe
+  sembrata fatta e non avrebbe salvato niente di visibile. `bootUI()` staccata da `onSynced`.
+- **Si parte dalla copia locale solo dopo aver rinunciato al server**, riusando i 5s di
+  `OFFLINE_GRACE_MS` che c'erano già. Lo stato del server è quello che vale aspettare: ha anche il
+  lavoro degli altri, questa copia ha solo il nostro. Partire sempre da locale sarebbe stato un
+  *altro* lavoro (caricamento istantaneo) con rischi suoi, infilato di straforo dentro questo.
+- **Copia locale vuota → niente boot.** È la prima visita da quel browser: dipingere un albero
+  vuoto direbbe «il progetto non ha file», che è una bugia. Meglio lasciare su la fascia.
+- **Da offline non si compila.** È un giro sul server: potrebbe solo fallire, e apriresti su un
+  errore su cui nessuno può agire. Resta in debito (`openCompilePending`) e parte al primo sync.
+- **Lato server, lo stato Yjs si scrive al seed e non più solo al primo salvataggio.** Non era
+  nella richiesta, ma la richiesta la rendeva necessaria: seminare costruisce item con **ID nuovi**,
+  quindi due seed dello stesso `files/` producono due insiemi rivali sotto le stesse chiavi, e una
+  `Y.Map` risolve tenendone uno e buttando l'altro. Finora invisibile (contenuto identico
+  comunque). Con una copia in IndexedDB smette di esserlo: un progetto aperto, mai modificato e
+  riaperto dopo un riavvio poteva buttare via **proprio la copia che teneva il lavoro offline di
+  qualcuno**. È la stessa famiglia del guaio di duplicazione del giro 7, vista dal lato opposto.
+- **La fascia ora dice il vero** («kept in this browser, reload included»): la vecchia formula era
+  esatta solo se aspettavi, e quindi non era esatta.
+
+### Verificato
+
+(dev :3000, `test/smoke.sh` **31/31** prima e dopo, progetti di prova creati e poi cancellati —
+nessun progetto di Tommy toccato)
+
+- **Ricostruita la caduta di linea vera invece di simularla**: HTTP su, WebSocket giù, facendo
+  girare al posto del dev un server con `COLLAB_PATH` diverso — stessa porta e stesso volume,
+  perché l'IndexedDB è legato all'**origine** e doveva restare `:3000`. (`provider.disconnect()`
+  non era un'opzione: `app.js` è un modulo, dalla console non si raggiunge.)
+- Scritto `MARKER-OFFLINE-G18` da `○ offline` → **assente dal disco del server**. È esattamente lo
+  stato che prima moriva col tab.
+- **Ricaricata la pagina sempre da offline** → marker a riga 17, albero, tab, outline e PDF in
+  cache tutti dipinti: la UI è partita dalla copia locale.
+- Rimesso il server vero → riconnessione da sola, fascia sparita, e il marker **arrivato sul disco
+  del server**.
+- **Seed provato, non dedotto**: progetto nuovo aperto e mai toccato → `doc.ystate` presente con
+  **zero** righe `collab stored`. Il timestamp da solo non distingueva seed e salvataggio.
+- Non-regressione: due tab sullo stesso progetto (che ora condividono anche l'IndexedDB)
+  sincronizzano dal vivo; compile all'apertura invariata; console pulita a parte il 404 già
+  documentato (`/build` su progetto mai compilato).
+
+**Il limite onesto, che resta di proposito**: `init()` chiede `/api/projects/:id` prima di aprire
+il socket e senza risposta mostra la schermata d'errore. La copia locale quindi ti salva quando la
+pagina si carica ma il socket no; se è morto anche l'HTTP la pagina non si carica affatto, quindi
+il caso è teorico. Nel mezzo scomodo — pagina servita, API che tossisce — vedi la schermata
+d'errore, ma **il lavoro non è perso**: è nell'IndexedDB e torna al primo caricamento riuscito.
+Quel che sparisce del tutto è la regola «se sei offline non ricaricare».
+
+**In coda restano**, dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL
+per-progetto), **template** (Step G, da disegnare prima) e la questione **temi/`stex` vs Lezer**
+parcheggiata nel giro 16.
+
+⚠️ **Non è live**: serve il pull+rebuild sul VPS (Albi), fermo a `1541753` — gli mancano i giri
+dall'8 in poi, questo compreso. `package.json` cambia, ma `y-indexeddb` è una **devDependency** e
+l'immagine fa `npm ci --omit=dev`: nessuna dipendenza nuova arriva a runtime, se la porta il
+bundle già committato.
+
+---
+
 ## 2026-08-07 (bis) — Giro 17: il salto al collega arriva alla sua riga, non solo al suo file ✅ (check di Tommy OK)
 
 **Tommy chiede una funzione che c'era già.** «Se schiaccio sull'icona di un collaboratore mi porta
