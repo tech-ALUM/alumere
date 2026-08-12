@@ -7,6 +7,85 @@
 
 ---
 
+## 2026-08-12 (bis) — Giro 19: i salti atterrano a metà schermo + corpo del carattere regolabile ✅ (check di Tommy OK)
+
+Due richieste piccole e indipendenti nello stesso giro. La prima aveva una causa sola sotto tre
+sintomi, ed è la parte che vale la pena ricordare.
+
+### Il salto che atterrava sul bordo
+
+Il sintomo raccontato da Tommy: cliccando l'avatar di un collega, o facendo doppio click sul PDF,
+si finiva **in fondo alla pagina** o **in cima** a seconda di dove stava il proprio cursore rispetto
+al bersaglio. Sembrano due comportamenti capricciosi; è invece una riga sola.
+
+Tutti i salti finivano in `view.dispatch({ ..., scrollIntoView: true })`, e in CodeMirror quel
+`true` significa **"nearest"**: scrolla il minimo indispensabile. Quindi il bersaglio si ferma
+sempre sul bordo **da cui è entrato** — in basso se venivi da sopra, in alto se venivi da sotto.
+Il "dipende da dove sta il cursore" non era un dettaglio del racconto: era esattamente la regola.
+
+**La cosa utile trovata leggendo**: il doppio click sul PDF non ha uno scroll suo. `onPdfDblClick`
+risolve la posizione con SyncTeX e poi chiama `gotoIssue`, lo stesso delle righe degli errori. Due
+sintomi lontani in interfaccia, una funzione sola sotto. I punti erano quattro in tutto e sono
+diventati un helper unico, `revealPos`.
+
+**Le decisioni prese scrivendolo**
+
+- **Si centra, ma non sempre.** Se la riga è già comodamente davanti a te, strappare la pagina
+  sotto gli occhi di chi sta leggendo è peggio del problema. Dentro la fascia centrale (il 60%,
+  `REVEAL_BAND`) si ricade su "nearest", che non fa nulla quando il punto è già visibile. Fuori,
+  si centra.
+- **Quel che non si riesce a misurare risponde "no"**, cioè centra: è il lato sicuro. Copre i due
+  casi che contano e li vuole centrati entrambi — `coordsAtPos` dà `null` quando la posizione è
+  fuori dall'intervallo disegnato (quindi lontana), e il box ha altezza zero quando l'editor si sta
+  aprendo o la vista è stata appena ricostruita da `openFile`.
+- **L'indice resta com'era, di proposito.** `gotoOutline` porta la sezione in cima e non passa da
+  qui: saltare a una sezione per leggerla vuole il titolo in alto col testo sotto, che è una
+  domanda diversa dal "portami esattamente lì". Uniformare avrebbe sprecato mezzo schermo sopra il
+  titolo.
+
+Misurato dopo: la riga atterra al **58,8%** dell'altezza, non al 50 — CodeMirror centra contando
+anche il padding del contenuto. A occhio è metà schermo, ed era quello che serviva; se un giorno
+desse fastidio si aggiusta con un `yMargin`.
+
+### Il corpo del carattere
+
+Nel menu ⚙ fra tema e aspetto, scala **in punti** come un word processor: 8, 9, 10, 11, 12, poi
+14, 16, 18, 20. I punti li porta il CSS per davvero (`--editor-font: 10pt`) — un pt è 4/3 di px per
+definizione — quindi **nessuno fa la conversione a mano**.
+
+- **Default 10pt = 13,33px** contro i 13,5px a cui l'editor era inchiodato prima: l'1% di
+  differenza, invisibile. Il giorno in cui esce, a nessuno cambia la dimensione sotto il naso.
+- **Serve `view.requestMeasure()`.** CM misura i caratteri una volta e se li tiene: senza, la
+  colonna dei numeri, il cursore e le coordinate che chiedono gli overlay dei commenti continuano a
+  rispondere alla vecchia misura. Il `geometryChanged` che ne esce rimette a posto anche un popover
+  aperto.
+- **È una scelta per-browser, non del progetto**, come il tema: due persone sullo stesso file lo
+  leggono a corpi diversi, ed è tutto il senso della cosa.
+
+### La lezione del giro, che non sta nel codice
+
+Durante la verifica la compilazione sembrava **piantata** su "Compiling…" e i salti non
+scrollavano. Sembravano due bug appena introdotti. Non lo erano: `git stash` delle modifiche e i
+due sintomi restavano identici sul codice di prima.
+
+La causa vera: quel pannello browser **non esegue i frame** finché qualcosa non forza un disegno —
+e CodeMirror applica gli effetti di scroll proprio nel ciclo di misura guidato da
+`requestAnimationFrame`. Appena fatto uno screenshot, salto e compilazione sono arrivati insieme.
+**La lezione da tenere**: in quell'ambiente "non succede niente" non è una diagnosi, è
+un'osservazione; prima di leggerla come un guasto va escluso che manchi semplicemente il frame. E
+`git stash` costa dieci secondi e separa "l'ho rotto io" da "era già così" senza discutere.
+
+### Cosa resta non provato
+
+- **Il doppio click sul PDF**: la ricerca inversa non risolve la posizione in quel browser
+  incorporato, né prima né dopo le modifiche. Passa dallo stesso `revealPos` verificato sulle altre
+  due strade, e in `gotoIssue` è cambiata solo quella riga — ma di suo non è stato visto girare.
+- **`gotoPeer`** (il salto all'avatar): servono due persone collegate.
+
+⚠️ **Non è live**: il VPS ha i giri fino al 18 (vedi sotto), questo no. Serve pull+rebuild.
+
+---
+
 ## 2026-08-12 — Guasto in produzione: il login era fermo, e la causa stava fuori dal repo ✅ (risolto, confermato da Tommy)
 
 **Non è un giro di sviluppo: non è stata toccata una riga di codice.** Ma è esattamente il tipo di
@@ -74,9 +153,15 @@ cambiata: il guasto entra dal lato che il repo non vede.
   guasto si manifesta solo a chi deve *rientrare* — ed è per questo che è passato del tempo prima
   che qualcuno lo notasse.
 
-⚠️ **Stato deploy invariato**: il VPS resta a `1541753`, gli mancano i giri dall'8 in poi. In coda,
-dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL per-progetto), **template**
-(Step G, da disegnare prima) e la questione **temi/`stex` vs Lezer** parcheggiata nel giro 16.
+✅ **Deploy in pari** (aggiornato in giornata, dopo che questa sezione era già scritta): Albi ha
+fatto pull+rebuild, il VPS non è più fermo a `1541753` — **i giri dall'8 al 18 sono live**, ultimo
+commit che tocca il codice `1328f9f` (il lavoro offline che sopravvive al ricaricamento). Quindi le
+righe «non è live» nelle sezioni datate qui sotto sono **storia, non stato attuale**: valevano il
+giorno in cui sono state scritte.
+
+In coda, dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL per-progetto),
+**template** (Step G, da disegnare prima) e la questione **temi/`stex` vs Lezer** parcheggiata nel
+giro 16.
 
 ---
 
