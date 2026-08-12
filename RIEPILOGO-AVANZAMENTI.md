@@ -7,6 +7,79 @@
 
 ---
 
+## 2026-08-12 — Guasto in produzione: il login era fermo, e la causa stava fuori dal repo ✅ (risolto, confermato da Tommy)
+
+**Non è un giro di sviluppo: non è stata toccata una riga di codice.** Ma è esattamente il tipo di
+cosa che questo file esiste per ricordare, perché la causa non sta da nessuna parte in git e fra sei
+mesi non se la ricorda nessuno.
+
+Albi prova a entrare su `docs.alum-lab.com` con la sua mail e ottiene **«Couldn't send the email, try
+again.»**. Riprovato da due browser diversi: identico.
+
+### La diagnosi, che è quasi tutta lettura del codice
+
+Quella stringa ha **una sola sorgente** ([server.js:578](server.js), riga 558 sul commit in
+produzione): il `catch` attorno a `sendLoginLink`, che risponde **502**. Quindi è il server a
+parlare, e il test sui due browser non poteva cambiare niente — non inutile però: ha escluso il
+client.
+
+Il valore vero è in ciò che quel singolo ramo esclude **per costruzione**, prima di toccare il VPS:
+
+| Se fosse stato… | …avremmo visto |
+|---|---|
+| Dominio non ammesso | `Enter a valid @alum-lab.com email` (403) |
+| Rate-limit (5/10min per email) | `Too many requests` (429) |
+| **`.env` perso col deploy** | **nessun errore**: `SMTP_HOST` vuoto → l'app *logga* il link e risponde OK |
+
+Quest'ultima riga è la più utile e la meno ovvia: il fallback dev, nato per tutt'altro, rende
+**impossibile** che questo errore significhi «manca la configurazione». Restava solo un invio
+davvero rifiutato.
+
+Il resto lo dice il log, scritto una riga sopra la risposta:
+`[alumere][auth] invio mail fallito: Invalid login: 535 5.7.8 authentication failed`.
+Un 535 arriva **dal server di posta, dopo l'handshake**: connessione, porta 465, DNS e TLS erano
+tutti sani. Rifiutata solo la coppia utente/password.
+
+### La causa: una password cambiata altrove
+
+`SMTP_USER` è `tech@alum-lab.com` e la sua password **era stata ruotata**. Nel `.env` sul VPS c'era
+ancora la vecchia; l'app non ha modo di accorgersene e continua a presentarla. Fine.
+
+**La lezione da tenere**: qui la configurazione di produzione dipende da uno stato che vive fuori
+dal progetto — la casella di posta. Nessun deploy, nessun commit e nessun test può accorgersi che è
+cambiata: il guasto entra dal lato che il repo non vede.
+
+### La correzione, e le trappole intorno
+
+- Nuova password in `/opt/alum/alumere/.env`, poi **`up -d --force-recreate app`**. Un
+  `docker compose restart` **non** sarebbe bastato: `env_file` si legge alla *creazione* del
+  container, non al riavvio.
+- Senza `--build`: l'immagine resta quella di prima, quindi **nessun pull** e i giri dall'8 in poi
+  non sono partiti di straforo. Sistemare la posta non obbligava a fare il deploy.
+- Verificato con `transporter.verify()` eseguito dentro il container invece che dalla UI: dà
+  `SMTP OK` senza consumare i 5 tentativi/10min e senza aspettare una mail.
+- **Detto ad Albi di smettere di riprovare** mentre indagavamo: dopo il quinto tentativo il messaggio
+  sarebbe cambiato in `Too many requests` — un secondo sintomo, falso, sopra al primo — e i provider
+  di posta bloccano l'account dopo troppi 535 di fila.
+
+### Due cose che il guasto ha messo in luce, e restano vere
+
+- **Le @menzioni fallivano in silenzio.** La stessa casella manda le notifiche dei commenti
+  ([server.js:1160](server.js)), ma lì l'errore è solo un `console.warn` e l'API risponde comunque
+  `{ ok: true }`. Quindi da quando la password è cambiata quelle mail non partivano, **senza che
+  nessuno vedesse niente**. Ripristinate dalla stessa correzione. Se un giorno si volesse renderlo
+  visibile, il posto è `sent` nella risposta, che già conta gli invii riusciti.
+- **Un login rotto è invisibile finché non serve.** Le sessioni aperte vivono di cookie e non
+  passano da qui: chi stava già dentro ha continuato a lavorare senza accorgersi di niente. Il
+  guasto si manifesta solo a chi deve *rientrare* — ed è per questo che è passato del tempo prima
+  che qualcuno lo notasse.
+
+⚠️ **Stato deploy invariato**: il VPS resta a `1541753`, gli mancano i giri dall'8 in poi. In coda,
+dai giri vecchi: **sicurezza giro 2** (allowlist per-persona, ACL per-progetto), **template**
+(Step G, da disegnare prima) e la questione **temi/`stex` vs Lezer** parcheggiata nel giro 16.
+
+---
+
 ## 2026-08-08 — Giro 18: il lavoro scritto a linea caduta non muore più col tab ✅ (check di Tommy OK)
 
 **Il giro non nasce da una richiesta, nasce da una domanda.** «Ogni quanto viene fatto
