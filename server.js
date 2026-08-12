@@ -200,6 +200,12 @@ async function mailTransport() {
   }
   return _transport;
 }
+// Log line for a failed send. nodemailer already appends the server's own reply to `message`
+// (smtp-connection: `err.message += ': ' + response`), but NOT `code` — and that's the half that
+// says WHICH kind of failure it is: EAUTH (credentials refused, we reached the server) vs
+// ECONNECTION/ETIMEDOUT/ESOCKET (never got there). Opposite fixes, so put it up front instead of
+// making whoever reads the log reproduce the error by hand to find out. See DEPLOY.md.
+const mailErr = (e) => `${e.code ? e.code + ": " : ""}${e.message}`;
 // Shared by the login email and the two auth pages below: same face as the app (styles.css).
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -574,7 +580,7 @@ app.post("/api/auth/request", async (req, res) => {
   } catch (e) {
     pendingLogins.delete(token);
     persistPending();
-    console.error(`[alumere][auth] invio mail fallito: ${e.message}`);
+    console.error(`[alumere][auth] invio mail fallito: ${mailErr(e)}`);
     return res.status(502).json({ ok: false, error: "Couldn't send the email, try again." });
   }
   res.json({ ok: true, email: user.id });                  // generic — the client shows "controlla la posta"
@@ -1177,7 +1183,7 @@ app.post("/api/projects/:id/mentions", requireUser, async (req, res) => {
           `</div>`,
       });
       sent++;
-    } catch (e) { console.warn(`[alumere][mention] mail to ${u.id} failed: ${e.message}`); }
+    } catch (e) { console.warn(`[alumere][mention] mail to ${u.id} failed: ${mailErr(e)}`); }
   }
   res.json({ ok: true, sent });
 });

@@ -89,7 +89,7 @@ Valori da impostare (dettaglio in `.env.example`):
 | `SESSION_SECRET` | *(vedi sotto)* | Firma i cookie. Genera:  `openssl rand -hex 32` |
 | `SMTP_HOST` | `mail.privateemail.com` | Server SMTP della tua casella. |
 | `SMTP_PORT` | `465` | `465` = SSL; `587` = STARTTLS. |
-| `SMTP_USER` / `SMTP_PASS` | `noreply@example.com` / … | Credenziali della casella. |
+| `SMTP_USER` / `SMTP_PASS` | `noreply@example.com` / … | Credenziali della casella. Se il provider usa le **password per-applicazione**, in `SMTP_PASS` va quella, **non** la password del webmail (vedi sotto). |
 | `SMTP_FROM` | `noreply@example.com` | Mittente mostrato (default = `SMTP_USER`). |
 
 Genera un segreto di sessione forte:
@@ -189,6 +189,43 @@ docker run --rm -v alumere_alumere-data:/data -v "$PWD":/backup alpine \
   le email dei link rischiano lo spam.
 - Manda un link di prova a due-tre provider diversi (Gmail, Outlook, …) e controlla che arrivi in inbox.
 
+### Password per-applicazione (il trabocchetto del 535)
+
+Su privateemail il **webmail** e il servizio di **submission** (Dovecot) si autenticano
+separatamente. Appena sulla casella esiste una **app-specific password** — anche una creata per
+tutt'altro client, es. Thunderbird — la password normale della casella viene **rifiutata via
+SMTP/IMAP**, e questo vale **anche con la 2FA disattivata**. Il webmail continua a funzionare
+perché non passa dalla submission auth.
+
+Conseguenza pratica: *"entro nel webmail, quindi la password è giusta"* è un **falso indizio**.
+Il login prova solo che la casella esiste. Per sapere se l'invio funziona, **manda davvero una
+mail dal webmail**: se il webmail invia ma l'app no, è la credenziale, non una sospensione.
+
+In `SMTP_PASS` va quindi la app-specific password. Dopo averla messa in `.env`:
+
+```bash
+docker compose -f docker-compose.alum.yml up -d --force-recreate app
+```
+
+Per testare le credenziali **senza inviare niente** (autentica e chiude):
+
+```bash
+docker exec alumere node -e "
+const nm=require('/app/node_modules/nodemailer');
+nm.createTransport({host:process.env.SMTP_HOST,port:Number(process.env.SMTP_PORT),
+  secure:Number(process.env.SMTP_PORT)===465,
+  auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS},connectionTimeout:15000})
+ .verify().then(()=>console.log('OK')).catch(e=>console.log('FAIL '+e.code+' '+(e.response||e.message)));
+"
+```
+
+Due avvertenze quando si legge il risultato:
+
+- `535 5.7.8 ... (reason unavailable)` è il messaggio **generico** di Dovecot: identico per password
+  sbagliata, casella disabilitata e blocco di policy. Non distingue niente — non perderci tempo.
+- privateemail ha **protezione brute-force**: dopo una raffica di tentativi falliti dallo stesso IP
+  può rifiutare per un po' anche la password **giusta**. Non insistere con credenziali già rifiutate.
+
 ---
 
 ## Operazioni
@@ -243,6 +280,8 @@ Ripristino: l'inverso (`tar xzf … -C /data`) su un volume vuoto, ad app ferma.
 | Certificato non emesso | DNS non ancora propagato, oppure porte 80/443 chiuse, oppure il dominio non punta al server. Guarda i log di `caddy`. |
 | Non resta loggato / loop 401 | Manca `COOKIE_SECURE=1` dietro HTTPS, oppure `PUBLIC_BASE_URL` è `http://` invece di `https://`. |
 | La mail non arriva | Errore SMTP → la UI mostra "invio non riuscito". Controlla i log di `app`, lo spam, SPF/DKIM, le credenziali e la porta (465 vs 587). |
+| `EAUTH` / `535 5.7.8 authentication failed` nei log, ma la password funziona sul webmail | Serve la **password per-applicazione** in `SMTP_PASS`, non quella del webmail — [vedi sopra](#password-per-applicazione-il-trabocchetto-del-535). Il login al webmail non prova che l'SMTP vada. |
+| `ECONNECTION` / `ETIMEDOUT` nei log | Non si è arrivati al server: porta in uscita bloccata, `SMTP_HOST` sbagliato, o DNS. È un problema di rete, **non** di credenziali (quello sarebbe `EAUTH`). |
 | "Troppe richieste" al login | Rate-limit per-email (5 / 10min). Con `TRUST_PROXY=1` il backstop per-IP usa l'IP reale, non quello di Caddy. |
 | Debug diretto dell'app | Non è pubblicata sull'host. Usa `docker compose -f docker-compose.prod.yml exec app node -e "..."`, oppure aggiungi temporaneamente `ports: ["127.0.0.1:3000:3000"]` al servizio `app` e un tunnel SSH. |
 
