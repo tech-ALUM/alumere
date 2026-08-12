@@ -7,6 +7,141 @@
 
 ---
 
+## 2026-08-12 (ter) — Coda del guasto SMTP: non era la password ruotata, era la app-specific password ✅
+
+> **Corregge la voce delle 13:35 qui sotto** («il login era fermo, e la causa stava fuori dal repo»).
+> Quella diagnosi arriva fino al 535 ed è giusta in tutto il resto, ma la conclusione — password
+> ruotata, `.env` aggiornato, risolto — non regge alla misura: **alle 12:53 nel `.env` c'era già la
+> credenziale nuova e il 535 c'era ancora**. La rotazione può spiegare l'insorgenza; la soluzione
+> era un'altra cosa.
+
+**La segnalazione conteneva l'indizio falso che ha reso lungo tutto il giro**: «dice che non riesce
+a mandare la mail, ma la password di `tech@alum-lab.com` è corretta, nel webmail entro». La domanda
+era se fosse caricata nella config di Docker. Lo era. Ed è proprio «nel webmail entro» il motivo per
+cui la causa vera non veniva sospettata da nessuno dei due lati.
+
+### Prima cosa: rispondere davvero alla domanda fatta
+
+Non è tempo perso, perché una risposta precisa qui chiude in un colpo una **famiglia** di cause
+(apici, un `#` che diventa commento, whitespace in coda, passthrough mancante nel compose):
+
+- `docker-compose.alum.yml` usa `env_file: .env` → le `SMTP_*` sono tutte nell'ambiente del
+  container, verificato con `docker exec alumere env`.
+- Password confrontata host↔container **per hash** (`sha256`, mai stampata): identica
+  byte-per-byte, 14 byte, nessun apice, nessun newline in coda.
+- `.env` toccato alle 12:38, container ricreato alle 12:43, misura alle 12:53 → **non** stava
+  girando un ambiente vecchio, e la credenziale sotto test era proprio quella appena installata.
+  È questo timestamp che smentisce il «risolto» della voce precedente.
+- `nodemailer` presente e importabile nel container.
+
+### Il 535 non dice niente, e verificarlo è stato il passo che ha svoltato
+
+Con `verify()` dall'interno del container (autentica e chiude, **nessuna mail inviata**) la risposta
+era sempre `535 5.7.8 Error: authentication failed: (reason unavailable)`. Il punto è quel che è
+venuto dopo: **la stessa identica riga** con una password inventata *e* con una casella inesistente.
+È il messaggio generico di Dovecot, uguale per password sbagliata, account disabilitato e blocco di
+policy: **non distingue niente**, e leggerci dentro una causa era la trappola in cui sono cadute, in
+modi diversi, entrambe le ipotesi in campo.
+
+| Tentativo | Esito |
+|---|---|
+| 465 SSL, AUTH PLAIN / AUTH LOGIN | 535 |
+| 587 STARTTLS, AUTH PLAIN / AUTH LOGIN | 535 |
+| utente come indirizzo completo / solo localpart | 535 |
+
+Tutte le combinazioni giù allo stesso modo → non era porta né meccanismo, era la credenziale. E
+l'IP del VPS (`84.247.128.81`) risultava **pulito** su zen.spamhaus.org, spamcop, barracuda e sorbs:
+nemmeno reputazione.
+
+### Le due ipotesi sbagliate, e cosa le ha smontate
+
+**«Namecheap ha sospeso l'invio»** presuppone un prima in cui funzionava, e quel prima non esiste:
+il percorso mail era stato verificato **solo con MailHog** (righe 2148 e 2293 di questo file), e il
+deploy del 15/07 aveva verificato health, TLS, SPF, DMARC e MX **ma mai un invio autenticato vero**.
+Riga 2262, nero su bianco: «manca solo fornire dominio + DNS e credenziali SMTP reali». Non era una
+regressione: l'SMTP vero non aveva mai funzionato.
+
+**«La password è stata ruotata»** spiega bene perché qualcosa possa essersi rotto, e resta la
+spiegazione più probabile dell'insorgenza. Ma non spiega il guasto che avevamo davanti, perché la
+password nuova era già in `.env` e veniva rifiutata comunque.
+
+**La lezione da tenere**: un blocco e una rotazione sono entrambi *racconti di una regressione*, e
+una regressione ha bisogno di un prima che funzionava. Vale la riga di ragionamento per chiedersi se
+quel prima sia mai stato **dimostrato**, invece di darlo per scontato perché il servizio esiste da
+settimane. Qui il diario ha risposto meglio del server.
+
+### La causa vera: la password per-applicazione
+
+Su privateemail il **webmail** e il servizio di **submission** (Dovecot — lo dice il banner:
+`220 mail.privateemail.com Dovecot ready.`) si autenticano **separatamente**. Appena sulla casella
+esiste una **app-specific password** — qui ne esisteva una creata per Thunderbird, per tutt'altro
+scopo — la password normale della casella viene **rifiutata dai client esterni** (SMTP/IMAP), e
+questo vale **anche con la 2FA disattivata**, che era il motivo per cui la pista era stata scartata
+in partenza. Il webmail continua a funzionare perché non passa da quella autenticazione.
+
+Da cui l'unica cosa che serviva davvero: in `SMTP_PASS` la **app-specific password**, poi
+`up -d --force-recreate app`. Confermato funzionante da Albi.
+
+**Il test che avrebbe accorciato tutto**: mandare una mail **dal webmail**, non fermarsi al login.
+Il login prova solo che la casella esiste; se il webmail invia ma l'app no, è la credenziale e non
+una sospensione. Due righe di prova al posto di un pomeriggio di ipotesi.
+
+⚠️ E un'avvertenza per la prossima volta: privateemail ha **protezione brute-force**. Dopo una
+raffica di tentativi falliti anche la password **giusta** può essere rifiutata per un po' — insistere
+con credenziali già rifiutate è il modo migliore per inseguire un fantasma. Vale sia per i tentativi
+dalla UI (già annotato sotto) sia per i nostri `verify()` di diagnosi.
+
+### Quel che è finito nel repo, perché non si ripeta
+
+Il fix vero non tocca il codice, sta in `.env`. Ma la diagnosi era ricostruibile solo a mano, e
+questo sì:
+
+- **`.env.example`**: avviso sopra `SMTP_PASS` — se il provider usa le password per-applicazione, lì
+  va quella, e «entro nel webmail» non prova che l'SMTP vada.
+- **`DEPLOY.md`**: sezione **«Password per-applicazione (il trabocchetto del 535)»** con il perché,
+  il one-liner `verify()` che prova le credenziali **senza inviare niente**, e le due avvertenze
+  (535 generico, brute-force). Più due righe di troubleshooting: `EAUTH`/535 → app-password;
+  `ECONNECTION`/`ETIMEDOUT` → è rete, non credenziali. E la riga della tabella env che ci rimanda.
+- **`server.js`**: helper `mailErr(e)` che mette il **`code`** davanti al messaggio, usato in
+  entrambi i punti d'invio — magic-link e menzioni. Sul secondo si innesta l'osservazione della voce
+  sotto (le @menzioni fallivano in silenzio): il `console.warn` resta un warn e l'API continua a
+  rispondere `{ ok: true }`, ma almeno adesso il log dice **di che morte** — `EAUTH` o
+  `ECONNECTION` sono due problemi diversi. Rendere visibile il fallimento lato risposta (il campo
+  `sent`) resta il follow-up già proposto lì, e non è stato fatto qui.
+
+**Una cosa che avevo letto male, e la correzione è il punto interessante.** Avevo detto che il log
+nascondeva il `535` perché stampava solo `e.message`. Falso: `nodemailer` **ci attacca già** la
+risposta del server (`smtp-connection`: `err.message += ': ' + response`) — e infatti il 535 nella
+voce sotto è stato letto proprio dal log, cosa che da sola smentiva la mia affermazione. La metà che
+mancava davvero è il **`code`**, che non sta nel messaggio ed è esattamente quel che separa `EAUTH`
+(siamo arrivati al server, credenziali rifiutate) da `ECONNECTION`/`ETIMEDOUT` (non ci siamo
+arrivati) — rimedi opposti. Il rimedio proposto era più largo del buco; verificarlo nel sorgente di
+`nodemailer` invece di dedurlo l'ha ristretto a quel che serviva.
+
+### Verificato
+
+(host e server mai toccati oltre a `.env`; **nessuna mail inviata** in tutta la diagnosi — solo
+`verify()`, che autentica e chiude)
+
+- `node --check` su `server.js` → OK. Node non è sull'host: fatto **dentro** il container, copiando
+  il file in `/tmp` e poi rimuovendolo, così l'app in esecuzione non è stata toccata.
+- `mailErr` provato sui tre casi reali → `EAUTH: Invalid login: 535 …`,
+  `ETIMEDOUT: connect ETIMEDOUT …`, e un `Error` nudo che resta il messaggio da solo (nessun
+  `undefined:` davanti).
+- **Confermato per misura** quel che dice la voce del giro 19 sullo stato del deploy: `md5sum` di
+  `/app/server.js` nel container combaciava con `git show HEAD:server.js` al giro 18, e l'immagine
+  portava la data dell'8/08. Il VPS aveva davvero i giri fino al 18 — l'avviso «fermo a `1541753`»
+  rimasto nella voce del giro 18 era già stale.
+
+**Il limite onesto**: il `(reason unavailable)` resta opaco, e non c'è modo di distinguere in locale
+password sbagliata da blocco di policy. L'unico discriminante economico è l'invio dal webmail; per
+la ragione vera dietro un 535 serve il supporto Namecheap, che il log di auth lo vede. Resta anche
+non chiarito **quando** la casella ha smesso di accettare la password normale: la app-specific
+password per Thunderbird esisteva già da prima, quindi è possibile che l'SMTP non abbia mai
+funzionato con quella credenziale e che la rotazione sia una coincidenza dello stesso giorno.
+
+---
+
 ## 2026-08-12 (bis) — Giro 19: i salti atterrano a metà schermo + corpo del carattere regolabile ✅ (check di Tommy OK)
 
 Due richieste piccole e indipendenti nello stesso giro. La prima aveva una causa sola sotto tre
@@ -86,7 +221,12 @@ un'osservazione; prima di leggerla come un guasto va escluso che manchi semplice
 
 ---
 
-## 2026-08-12 — Guasto in produzione: il login era fermo, e la causa stava fuori dal repo ✅ (risolto, confermato da Tommy)
+## 2026-08-12 — Guasto in produzione: il login era fermo, e la causa stava fuori dal repo ⚠️ (diagnosi giusta, ~~risolto~~ **causa corretta più sotto**)
+
+> ⚠️ **NOTA (12/08, ter)**: la password nuova **non bastava**. Serviva la **app-specific password**
+> della casella — vedi la voce in cima al file. Tutto quel che segue fino al 535 resta valido e
+> utile; è la conclusione «ruotata → `.env` → risolto» che la misura smentisce, perché alle 12:53
+> la credenziale nuova era già in `.env` e il 535 c'era ancora.
 
 **Non è un giro di sviluppo: non è stata toccata una riga di codice.** Ma è esattamente il tipo di
 cosa che questo file esiste per ricordare, perché la causa non sta da nessuna parte in git e fra sei
@@ -123,6 +263,12 @@ tutti sani. Rifiutata solo la coppia utente/password.
 
 `SMTP_USER` è `tech@alum-lab.com` e la sua password **era stata ruotata**. Nel `.env` sul VPS c'era
 ancora la vecchia; l'app non ha modo di accorgersene e continua a presentarla. Fine.
+
+> ⚠️ **Qui la conclusione è sbagliata, ed è l'unico punto che lo è.** La rotazione resta la
+> spiegazione più probabile dell'*insorgenza*, ma non della soluzione: con la password nuova in
+> `.env` il 535 restava. Serviva la **app-specific password** — privateemail rifiuta la password
+> normale della casella sui client esterni appena una app-password esiste, anche con la 2FA
+> disattivata. Il perché sta nella voce in cima al file.
 
 **La lezione da tenere**: qui la configurazione di produzione dipende da uno stato che vive fuori
 dal progetto — la casella di posta. Nessun deploy, nessun commit e nessun test può accorgersi che è
