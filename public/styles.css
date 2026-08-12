@@ -398,7 +398,9 @@ body[data-conn="offline"] .offline-bar { display: flex; }
   padding: 24px; text-align: center; color: var(--muted); font-size: 13px;
 }
 .editor-empty[hidden] { display: none; }
-.cm-editor { height: 100%; font-size: 13.5px; }
+/* The size comes from the ⚙ menu, in points (see FONT_SIZES in app.js). The fallback here is
+   the default one, so the editor is never unstyled if the script hasn't set the var yet. */
+.cm-editor { height: 100%; font-size: var(--editor-font, 10pt); }
 .cm-editor .cm-scroller { font-family: var(--mono); line-height: 1.55; }
 .cm-focused { outline: none !important; }
 .cm-gutters { background: #f7f9fc !important; border-right: 1px solid var(--line) !important; color: #aab6c2 !important; }

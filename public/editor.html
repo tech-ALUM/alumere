@@ -65,7 +65,7 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
 
       <div class="menu rail-menu" id="settingsMenu">
         <button id="settingsBtn" class="rail-btn" type="button" aria-haspopup="true"
-                title="Settings — LaTeX engine, editor theme, appearance">
+                title="Settings — LaTeX engine, editor theme, font size, appearance">
           <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="4.6"/><circle cx="9" cy="9" r="1.8"/><path d="M9 4.4V2.4M9 13.6v2M13.6 9h2M4.4 9h-2M12.25 5.75 13.7 4.3M5.75 12.25 4.3 13.7M12.25 12.25l1.45 1.45M5.75 5.75 4.3 4.3"/></svg>
         </button>
         <div class="menu-pop" hidden>
@@ -78,6 +78,9 @@ try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")do
           </label>
           <label>Editor theme
             <select id="editorTheme" title="Editor colour palette"></select>
+          </label>
+          <label>Font size
+            <select id="editorFontSize" title="Editor text size, in points — saved in this browser"></select>
           </label>
           <label>Appearance
             <select id="appTheme" title="Light/dark theme of the interface">

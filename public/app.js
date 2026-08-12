@@ -156,6 +156,44 @@ function initEditorTheme() {
   applyEditorTheme(saved);
 }
 
+// ---------- Editor text size (giro 19) ----------
+// In points, the way a word processor says it, because that's the scale people have a feel
+// for — and CSS carries them as points too (a pt is 4/3 of a px by definition), so the value
+// reaches the stylesheet as "11pt" and nobody does the conversion by hand. The ladder is
+// Word's: one-by-one where you actually read, then wider steps.
+//
+// 10pt is 13.33px against the 13.5px the editor was hard-wired to before this existed, so
+// the day this ships nobody's editor visibly changes size. Like the theme, the choice is
+// per-browser and not part of the project: two people on the same file can read it at
+// different sizes, which is the whole point.
+const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20];
+const FONT_DEFAULT = 10;
+const FONT_KEY = "alumere.editorFontSize";
+function applyEditorFontSize(pt) {
+  document.body.style.setProperty("--editor-font", `${pt}pt`);
+  try { localStorage.setItem(FONT_KEY, String(pt)); } catch {}
+  // CM caches the character metrics it measured once: without a re-measure the gutter, the
+  // caret and every coordinate the comment overlays ask for keep answering at the old size.
+  // The resulting geometryChanged also puts an open comment popover back where it belongs.
+  if (view) view.requestMeasure();
+}
+function initEditorFontSize() {
+  const sel = $("editorFontSize");
+  if (sel) {
+    sel.innerHTML = "";
+    for (const pt of FONT_SIZES) {
+      const o = document.createElement("option");
+      o.value = String(pt); o.textContent = `${pt} pt`;
+      sel.appendChild(o);
+    }
+  }
+  let saved = FONT_DEFAULT;
+  try { saved = Number(localStorage.getItem(FONT_KEY)) || FONT_DEFAULT; } catch {}
+  if (!FONT_SIZES.includes(saved)) saved = FONT_DEFAULT;   // hand-edited or from a future ladder
+  if (sel) { sel.value = String(saved); sel.addEventListener("change", () => applyEditorFontSize(Number(sel.value))); }
+  applyEditorFontSize(saved);
+}
+
 // App theme (chiaro/scuro/auto) e menu ⚙ sono gestiti da theme.js, condiviso con la home.
 
 // ---------- File model over the shared Y.Map ----------
@@ -848,7 +886,48 @@ function parseLatexLog(log) {
   return issues;
 }
 
-// Move the editor to file:line (used by the problem rows). openFile is synchronous, so the
+// ---------- Landing a jump (giro 19) ----------
+// Every "take me there" in the app used to end in CodeMirror's `scrollIntoView: true`, and
+// that `true` means "nearest": scroll the least you can. So the target parked on whichever
+// edge it entered from — the bottom of the screen when you came from above, the top when you
+// came from below. The line you asked for landed exactly where the eye doesn't go, and which
+// edge you got depended on where your cursor happened to be. One rule, three symptoms.
+//
+// Centre it instead. But only when it's worth a jolt: if the line is already sitting
+// comfortably in front of you, yanking the page under someone who is reading is worse than
+// doing nothing. Inside the band we fall back to "nearest", which is a no-op when the target
+// is fully visible and a small nudge when it's half-cut by an edge.
+//
+// The outline panel deliberately does NOT come through here: jumping to a section wants its
+// heading at the top with the text below it, which is a different question. See gotoOutline.
+const REVEAL_BAND = 0.6;             // the middle 60% of the viewport counts as "already in front of you"
+function revealPos(pos) {
+  if (!view) return;
+  const { EditorView } = CM.view;
+  const spec = { selection: { anchor: pos } };
+  if (typeof EditorView.scrollIntoView === "function" && !inRevealBand(pos)) spec.effects = EditorView.scrollIntoView(pos, { y: "center" });
+  else spec.scrollIntoView = true;
+  view.dispatch(spec);
+}
+
+// Is `pos` already in the comfortable middle? Anything we can't measure answers "no", which
+// centres — the safe side. That covers the two cases that matter and both want centring
+// anyway: coords are null when the position is outside the drawn range (i.e. far away), and
+// the box is zero-height when we're mid-reveal or on a view built one line ago by openFile.
+function inRevealBand(pos) {
+  try {
+    const c = view.coordsAtPos(pos);
+    if (!c) return false;
+    const box = view.scrollDOM.getBoundingClientRect();
+    if (box.height <= 0) return false;
+    const band = box.height * REVEAL_BAND;
+    const top = box.top + (box.height - band) / 2;
+    return c.top >= top && c.bottom <= top + band;
+  } catch { return false; }
+}
+
+// Move the editor to file:line — the problem rows, and the double click on the PDF (inverse
+// search lands here too, so both share the centring above). openFile is synchronous, so the
 // fresh view is ready to receive the selection right after the switch.
 function gotoIssue(file, line) {
   revealEditor();                    // the jump target must be visible (openFile also does this)
@@ -856,7 +935,7 @@ function gotoIssue(file, line) {
   if (!view || !line || (file && !hasPath(file))) return;
   const doc = view.state.doc;
   const pos = doc.line(Math.max(1, Math.min(line, doc.lines))).from;
-  view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  revealPos(pos);
   view.focus();
 }
 
@@ -2660,7 +2739,7 @@ function gotoThread(th) {
   if (!view) return;
   const r = resolveAnchor(view.state.doc.toString(), th.anchor);
   const pos = Math.min(r ? r.from : (th.anchor && th.anchor.from) || 0, view.state.doc.length);
-  view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  revealPos(pos);
   // Open the in-text popover once the scroll has landed (placing it needs fresh coords).
   // Re-check inside the callback: frames can arrive late (background tab) and the thread
   // may have been resolved or deleted in the meantime.
@@ -3073,7 +3152,7 @@ function gotoPeer(p) {
   else revealEditor();                               // same file, maybe collapsed editor
   if (view && loc.index != null) {
     const pos = Math.min(loc.index, view.state.doc.length);
-    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    revealPos(pos);
     view.focus();
   }
 }
@@ -3710,6 +3789,7 @@ async function init() {
   catch { document.body.innerHTML = errorScreen("Project not found or server unreachable."); return; }
   setProjName(meta.name || "Project");
   initEditorTheme();
+  initEditorFontSize();
 
   if (!window.YCOLLAB) {
     setConnState("broken", "collab unavailable");   // not "offline": nothing here will sync later
