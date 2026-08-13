@@ -7,6 +7,111 @@
 
 ---
 
+## 2026-08-13 — Giro 20: nomi corti nel rail, e l'avatar del collega che si clicca e non scappa ✅ (check di Tommy OK)
+
+Tre richieste piccole e indipendenti, tutte nel pannello di sinistra. La parte che vale la pena
+ricordare non è nessuna delle tre: è **come sono state provate**, perché due su tre hanno bisogno
+di un secondo essere umano collegato e un secondo essere umano non c'era.
+
+### I nomi nel rail
+
+Erano frasi: «Project files», «Review — comments on the text», «Chat with your collaborators»,
+«Project version history», «Settings — LaTeX engine, editor theme, font size, appearance». Sono
+tooltip di icone che stanno una sotto l'altra in una colonna larga 40px, e una descrizione lunga lì
+non spiega niente che l'icona non dica già. Ora: **Files, Review, Chat, History, Settings**. Solo
+`title=` in `editor.html`, nessun'altra parte del codice li leggeva (verificato con un grep prima di
+toccarli).
+
+### L'avatar nel tree diventa un teletrasporto
+
+Il marcatore sulle righe dei file rispondeva a «chi c'è dentro questo file» ma non era cliccabile,
+mentre lo stesso avatar nella strip in alto lo era da sempre (`gotoPeer`, giro 8). Due posti, una
+sola domanda: da entrambi ti porta dove sta la persona.
+
+**La decisione presa scrivendolo**: invece di ricopiare le cinque righe della strip, sono finite in
+`makePeerJump(el, p, label, onMiss)` — classe, ruolo, aria-label, listener. Non è pulizia per la
+pulizia: sono due chiamanti che devono restare la **stessa** interazione, e ricopiate divergono al
+primo ritocco. Stessa ragione per cui `avatarEl` è uno solo, e per cui al giro 19 i quattro salti
+erano diventati `revealPos`.
+
+`onMiss` copre il collega che se ne va **fra il render e il click**: `gotoPeer` adesso restituisce
+`true`/`false`, e dal tree il fallback è aprire comunque il file — cioè esattamente quel che avrebbe
+fatto un click sulla riga. Senza, il click moriva in silenzio.
+
+⚠️ **Da sapere**: il click segue **la persona, non la riga**. Se un collega ha due file aperti in due
+tab, il suo avatar compare su entrambe le righe e il salto ti porta dov'è il suo cursore, che può
+essere l'altro file. È la semantica che `gotoPeer` ha sempre avuto nella strip; qui diventa solo più
+visibile. Detto a Tommy prima del check e tenuto così di proposito — «click to follow» segue una
+persona. Se un giorno dà fastidio, dal tree si forza la riga con una riga di codice.
+
+### L'avatar che scappava da sotto il mouse
+
+Il sintomo: vai a cliccare l'avatar, e nell'istante in cui la riga va in hover compaiono ✎/🗑 e
+l'avatar **si sposta a sinistra**. Bersaglio mobile, e il bersaglio si muove proprio perché lo stai
+puntando.
+
+La causa era l'ordine nel DOM: `[twisty][icona][nome][marcatori][azioni]`, con le azioni a
+`display:none` finché non c'è hover. Comparendo **dopo** i marcatori, li spingevano indietro. Uno
+scambio di due `append` e basta: le azioni vanno **prima**, così i marcatori sono l'ancora destra
+della riga e non si muovono più. A cedere è il nome, che ha già l'ellissi e per cui accorciarsi è il
+comportamento normale.
+
+Misurato con hover vero (`row.matches(':hover')`, `display:flex` che viene dalla regola CSS e non da
+uno stile inline):
+
+| | a riposo | in hover |
+|---|---|---|
+| x dell'avatar | 170 | **170** — spostamento 0 |
+| fine di ✎🗑 | — | 164, cioè alla sua sinistra |
+| larghezza del nome | 151px | 109,5px ← è questo che cede |
+
+In CSS solo il cursore e un `scale(1.18)` sull'hover del marcatore. **Cresce invece di sollevarsi**
+come fa quello della toolbar: `transform` non tocca il layout, quindi in una lista fitta segnala
+«premimi» senza spostare la riga sotto il puntatore.
+
+### La lezione del giro: un secondo collega senza una seconda persona
+
+Due punti su tre si vedono solo se in stanza c'è qualcun altro, e due tab dello stesso browser non
+bastano — `peerList()` raggruppa **per persona** (`u.id`) e `renderTree()` scarta me stesso, quindi
+due tab mie collassano in un avatar solo che nel tree non compare proprio.
+
+La via d'uscita costa dieci righe dalla console della pagina: `window.YCOLLAB` espone `Y` e
+`HocuspocusProvider`, quindi si apre una **seconda connessione** alla stessa stanza con un `Y.Doc`
+suo e le si scrive in awareness l'identità che si vuole. Da lì in poi è un collega vero per tutto il
+resto del codice — nessun mock, nessun ramo di test nel sorgente: passa dalle stesse awareness, dallo
+stesso `peerList`, dallo stesso `renderTree`.
+
+Anche il cursore è vero: `Y.createRelativePositionFromTypeIndex` sul doc della seconda connessione
+produce una posizione che il **primo** doc risolve senza problemi — è tutto il senso delle posizioni
+relative, e infatti l'indice 500 di `main.tex` è atterrato sulla riga 21, `\tableofcontents`, che è
+esattamente dove doveva. Il caso di corsa si prova allo stesso modo: tieni il riferimento
+all'elemento, uccidi il provider finto, e clicchi l'avatar ormai staccato dal DOM.
+
+**Da tenere per la prossima volta**: le funzioni di presenza sono provabili da soli. Non serve un
+secondo computer né un secondo account — serve una seconda connessione.
+
+### Verificato
+
+- `node --input-type=module --check` su `app.js` → OK (Node è sull'host, vedi la voce del 07/08).
+- Le tre cose provate sul dev (`localhost:3000`, container `alumere-dev`) col collega finto qui
+  sopra. Console senza errori.
+- `bash test/smoke.sh` → **31 passati, 0 falliti** (gira in un container isolato suo su :3100, non
+  tocca né dev né prod).
+
+### Cosa resta non provato
+
+- **Due persone vere su due macchine.** Il collega era una seconda connessione dallo stesso browser:
+  attraversa lo stesso codice, ma la rete vera non l'ha vista.
+- **`targetDir` non lo tocca più.** Il click sull'avatar fa `stopPropagation`, quindi non passa dal
+  gestore della riga che imposta la cartella dei nuovi file. Voluto — il salto può atterrare in un
+  file diverso da quella riga (vedi l'avvertenza sopra) — e invisibile, ma è un cambio di
+  comportamento e sta scritto qui.
+
+⚠️ **Non è live**: il VPS è ancora ai giri fino al 18. Adesso sono **due** i giri che aspettano, il
+19 e questo. Serve un pull+rebuild solo.
+
+---
+
 ## 2026-08-12 (ter) — Coda del guasto SMTP: non era la password ruotata, era la app-specific password ✅
 
 > **Corregge la voce delle 13:35 qui sotto** («il login era fermo, e la causa stava fuori dal repo»).
