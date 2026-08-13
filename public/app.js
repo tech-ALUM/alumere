@@ -301,15 +301,23 @@ function buildList(list) {
     const renameBtn = document.createElement("button"); renameBtn.textContent = "✎"; renameBtn.title = "Rename";
     const delBtn = document.createElement("button"); delBtn.textContent = "🗑"; delBtn.title = "Delete";
     actions.append(renameBtn, delBtn);
-    row.append(tw, ic, nm);
+    // ✎/🗑 go BEFORE the peer markers on purpose: the avatars are the row's right anchor, so
+    // they hold their place when hovering reveals the buttons instead of sliding left from
+    // under the mouse you were aiming with. What gives way is the name, which already elides.
+    row.append(tw, ic, nm, actions);
     const here = node.type === "file" ? peersByFile.get(node.path) : null;
     if (here) {
       const marks = document.createElement("span");
       marks.className = "rowpeers";
-      for (const p of here.slice(0, 3)) marks.appendChild(avatarEl(p, { small: true }));
+      // Same teleport as the toolbar strip: from here the marker answers "who's in this file"
+      // AND takes you to them. Never me — renderTree drops my own row (I'm already there).
+      for (const p of here.slice(0, 3)) {
+        const av = avatarEl(p, { small: true });
+        av.title = `${p.name} · click to follow`;
+        marks.appendChild(makePeerJump(av, p, av.title, () => openFile(node.path)));
+      }
       row.appendChild(marks);
     }
-    row.appendChild(actions);
     li.appendChild(row);
     row.addEventListener("click", (e) => {
       if (e.target === renameBtn || e.target === delBtn) return;
@@ -3147,7 +3155,7 @@ function peerLocation(personKey) {
 }
 function gotoPeer(p) {
   const loc = peerLocation(p.key);
-  if (!loc) return;                                  // no file we know of → nothing to jump to
+  if (!loc) return false;                            // no file we know of → nothing to jump to
   if (currentPath !== loc.file) openFile(loc.file);
   else revealEditor();                               // same file, maybe collapsed editor
   if (view && loc.index != null) {
@@ -3155,6 +3163,21 @@ function gotoPeer(p) {
     revealPos(pos);
     view.focus();
   }
+  return true;
+}
+// "This avatar is also a teleport." One place for it, so the toolbar strip and the tree rows
+// can't drift apart: same class, same role, same jump. `onMiss` covers the peer who left
+// between the render and the click — from a tree row that means "just open the file", i.e.
+// exactly what clicking the row would have done.
+function makePeerJump(el, p, label, onMiss) {
+  el.classList.add("avatar-go");
+  el.setAttribute("role", "button");
+  el.setAttribute("aria-label", label);
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();               // on a tree row the row's own click must not fire too
+    if (!gotoPeer(p) && onMiss) onMiss();
+  });
+  return el;
 }
 function renderPresence(peers = peerList()) {
   if (!presenceEl) return;
@@ -3168,10 +3191,7 @@ function renderPresence(peers = peerList()) {
     if (!p.isMe) {
       const files = [...p.activeFiles].sort();
       if (files.length) el.dataset.name = `${p.name} — in ${files.join(", ")} · click to follow`;
-      el.setAttribute("aria-label", el.dataset.name);   // keep the tooltip and the a11y name in step
-      el.classList.add("avatar-go");
-      el.setAttribute("role", "button");
-      el.addEventListener("click", () => gotoPeer(p));
+      makePeerJump(el, p, el.dataset.name);   // aria-label follows the tooltip, so they stay in step
     }
     presenceEl.appendChild(el);
   });

@@ -286,6 +286,11 @@ body:not([data-conn="online"]) #saveHint { visibility: hidden; }
 /* No overlap here: a tree row sits on three different backgrounds (plain / hover / active),
    so there is no single opaque ring colour to hide the seam with. */
 .avatar-sm { width: 17px; height: 17px; font-size: 8px; box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
+/* Clickable here too (giro 20 — see makePeerJump). It grows instead of lifting like the
+   toolbar one does: `transform` doesn't touch layout, so a 17px marker in a dense list
+   signals "press me" without nudging the row under the pointer. */
+.rowpeers .avatar-go { cursor: pointer; transition: transform .1s ease; }
+.rowpeers .avatar-go:hover { transform: scale(1.18); }
 .rowactions { display: none; gap: 2px; }
 .row:hover .rowactions { display: flex; }
 .rowactions button {
