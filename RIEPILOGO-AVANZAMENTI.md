@@ -7,6 +7,101 @@
 
 ---
 
+## 2026-08-22 — Giro 21: la favicon, e due modi diversi di sparire in silenzio ✅ (check di Tommy OK)
+
+Una richiesta sola e piccola — l'app non aveva un'icona nella scheda del browser — e due guasti che
+valgono più della richiesta, perché sono **entrambi silenziosi**: nessun errore in console, nessuna
+riga nel log, solo il mappamondo grigio al posto del logo.
+
+### Cosa c'è ora
+
+Il segno non è nuovo: è il **∑ del topbar**, stesso gradiente accent→lilac, stesso raggio d'angolo
+(25%, come `.logo`). Quattro file:
+
+| file | perché |
+|---|---|
+| `public/favicon.svg` | i browser moderni, nitido a ogni misura — è la sorgente di verità |
+| `public/favicon.ico` | 16/32/48 — **Safari, che l'SVG non lo prende**, e la richiesta muta a `/favicon.ico` |
+| `public/apple-touch-icon.png` | 180px per la home di iOS, **senza** angoli tondi: la maschera la mette iOS |
+| `build/make-favicons.py` | rigenera i due raster dallo stesso disegno |
+
+**Il ∑ è disegnato come `path`, non scritto come testo.** Una favicon con dentro un `<text>` dipende
+da un font che il browser potrebbe non avere; un path viene uguale ovunque.
+
+**Lo script c'è perché `.ico` e `.png` sono blob opachi**: senza, il giorno che il logo cambia non li
+rifà nessuno. Gira sull'host con python3 + Pillow e non nel container — Node sull'host non c'è (voce
+del 07/08) e in `node_modules` non c'è niente per le immagini.
+
+L'ordine dei tre `<link>` non è casuale: **`.ico` prima dell'SVG**, perché WebKit storicamente prende
+il primo `rel="icon"` che trova.
+
+### Guasto n°1: il doppio trattino dentro un commento XML
+
+Il primo `favicon.svg` non si apriva, e in console non compariva niente — un'icona che non carica non
+è un errore per nessuno.
+
+Nel commento avevo scritto i nomi veri delle variabili, `--accent` e `--lilac`. **Il doppio trattino
+è illegale dentro un commento XML**: il file smette di essere well-formed, e un SVG non well-formed
+non è un'immagine. Nessun errore, solo l'assenza.
+
+**Il falso indizio che ha allungato il giro**: per provare i tre file dal browser avevo usato
+`img.decode()`, e sull'SVG rispondeva `EncodingError`. Sembrava la conferma del guasto, ma Chromium
+rifiuta `decode()` **anche su SVG perfettamente validi**: il probe era rotto quanto il file, e
+raccontava la stessa storia. L'ha chiusa in un colpo `xml.etree` di python, che dà **riga e
+colonna** — riga 3, colonna 75, `--accent`.
+
+**Da tenere**: per dire se un SVG è valido, un parser XML batte qualsiasi prova nel browser. E se la
+prova nel browser serve, quella buona è `onload` + `drawImage` su canvas con lettura dei pixel:
+misura che l'immagine è arrivata *e* si è disegnata. L'avvertenza sul doppio trattino ora sta dentro
+`favicon.svg` stesso, che è l'unico posto dove la leggerà chi sta per rifare l'errore.
+
+### Guasto n°2: la cache favicon di Safari (quello che ha fatto perdere più tempo)
+
+File a posto, servito `200 image/x-icon`, leggibile da ImageIO — e in Safari ancora il mappamondo,
+sia nella scheda sia nei preferiti.
+
+Non era il file: Safari tiene le favicon in un **database suo**, che il ricarica — anche forzato —
+non tocca. Ed è probabile che a sporcarlo sia stato proprio il guasto n°1: se apri la pagina nella
+finestra in cui l'SVG era rotto, Safari si segna «questo sito non ha icona» e da lì non ci torna più
+da solo. Sbloccato chiudendo Safari e cancellando `~/Library/Safari/Favicon Cache`.
+
+**La cosa da fare per prima, la prossima volta**: prima di sospettare il file, chiedersi **quale
+origine si sta guardando**. Qui `https://docs.alum-lab.com` rispondeva **404 su tutti e tre** i file
+e non aveva nessun tag `icon` nella index — cioè una delle due schede in ballo era garantito che
+mostrasse il mappamondo, e non per un bug. Trenta secondi di `curl` separano «non è servito» da «non
+è stato richiesto», e sono i due mondi in cui si cercano cose opposte.
+
+### Verificato
+
+- I tre file dal dev: `200` con `image/svg+xml`, `image/x-icon`, `image/png`.
+- `favicon.svg`: XML valido; nel browser `load` + rasterizzazione su canvas che torna angolo
+  trasparente, tile lilla e glifo bianco.
+- `favicon.ico`: letto da `sips` (48x48) — cioè da **ImageIO**, lo stesso decoder di Safari — e le
+  tre misure sono davvero dentro il contenitore (16/32/48, frame PNG).
+- I tre `<link>` nel DOM di **entrambe** le pagine: quella dei progetti e l'editor aperto su un
+  progetto vero. Zero errori in console.
+- `bash test/smoke.sh` → **31 passati, 0 falliti**.
+- **Check di Tommy**: logo presente in Safari sia sulla scheda sia nella barra dei preferiti.
+
+### Cosa resta non provato
+
+- **`apple-touch-icon.png` su una home di iOS vera.** Il file è giusto per forma — 180px, quadrato
+  pieno, **niente alpha**: la maschera arrotondata la mette iOS, e un PNG con gli angoli già
+  trasparenti si ritroverebbe quattro angoli neri dentro la forma. Ma sul telefono non l'ha messo
+  nessuno. **Deciso di lasciarlo non provato** (Tommy, 22/08): nessuno si mette un editor LaTeX sulla
+  home dell'iPhone, il file sta lì per completezza del set. Se un giorno servisse, il Simulatore iOS
+  di questo Mac lo prova in due minuti — Safari sul simulatore raggiunge `localhost` dell'host, e già
+  l'anteprima di «Aggiungi a Home» mostra l'icona.
+- **Altri browser e altre macchine.** Provato su Chromium (quello del preview) e su Safari, qui.
+
+⚠️ **Non è live**: adesso sono **tre** i giri che aspettano — il 19, il 20 e questo. La favicon, a
+differenza del codice, ha bisogno del **rebuild** e non solo del pull (la compose di produzione fa
+`COPY` a build-time, quindi i file statici entrano nell'immagine solo lì) — ma non è un passo in più
+da ricordare a qualcuno: `redeploy.sh` fa pull e build in un colpo, e il redeploy parte insieme al
+pull di Albi. Detto qui solo perché spiega perché un `git pull` a mano non basterebbe.
+
+---
+
 ## 2026-08-13 — Giro 20: nomi corti nel rail, e l'avatar del collega che si clicca e non scappa ✅ (check di Tommy OK)
 
 Tre richieste piccole e indipendenti, tutte nel pannello di sinistra. La parte che vale la pena
