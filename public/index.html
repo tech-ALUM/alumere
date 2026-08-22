@@ -7,6 +7,12 @@
 <script>/* apply the saved app theme before first paint (auto = follow the system) */
 try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")document.documentElement.dataset.appTheme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
+<!-- Favicon: the same ∑ tile as the topbar. The SVG is the source of truth (crisp at any
+     size); the .ico is the fallback for Safari, which still doesn't take SVG icons, and is
+     what the browser's bare /favicon.ico request finds anyway. -->
+<link rel="icon" href="favicon.ico" sizes="32x32" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
 </head>
 <body class="home-body">
   <header class="topbar">

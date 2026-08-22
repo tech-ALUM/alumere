@@ -7,6 +7,11 @@
 <script>/* apply the saved app theme before first paint (auto = follow the system) */
 try{var t=localStorage.getItem("alumere.appTheme");if(t==="dark"||t==="light")document.documentElement.dataset.appTheme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
+<!-- Favicon: see index.html. Same three lines here because a page gets no icon from
+     another page — and this is the tab that stays open all day. -->
+<link rel="icon" href="favicon.ico" sizes="32x32" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
 </head>
 <body>
   <header class="topbar editor-topbar">
