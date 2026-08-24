@@ -7,6 +7,130 @@
 
 ---
 
+## 2026-08-24 — Giro 22: il test che era verde per sbaglio ✅ (check delegato: ok di Tommy sul 31/31)
+
+Giro non pianificato. Un'altra sessione di Code stava liberando spazio, ha spento e riacceso Docker
+e — prima di farlo — ha messo da parte un backup dell'immagine di Alumère, dicendo a Tommy di
+verificare che l'app girasse ancora prima di cancellarlo. La verifica ha tirato fuori due cose che
+non c'entravano col backup.
+
+### La verifica: girare **dall'immagine**, non dal dev
+
+Per rispondere davvero alla domanda «funziona ancora?» il container giusto non è quello di sviluppo.
+La differenza fra i due compose non è cosmetica:
+
+| | `docker-compose.dev.yml` | `docker-compose.yml` |
+|---|---|---|
+| codice che gira | il working tree, montato | quello **dentro l'immagine** |
+| a cosa serve | iterare (hot-reload, niente rebuild) | sapere cosa vedrà il server |
+
+Il dev non può rispondere a «questo file è finito nell'immagine?», perché tutto gli arriva dal disco.
+È esattamente la classe di guasto della favicon del giro 21, dove i file statici entrano solo col
+`COPY . .` a build-time. **Da tenere come abitudine**: dev tutti i giorni, un giro dall'immagine
+prima di un redeploy.
+
+Ricostruita da zero (`docker compose up -d --build`) e attraversata a mano: boot pulito, login
+magic-link, i due progetti dal volume, compile LaTeX vera (PDF con la data di oggi al posto di quello
+in cache), collab a due schede — testo scritto in una e comparso nell'altra, cancellazione idem, e il
+file materializzato dentro il container tornato identico a prima — history con autori e diff, e i tre
+file della favicon serviti e rasterizzati. **L'app sta bene.**
+
+### Il guasto vero: lo smoke passato da 31/31 a 25/31
+
+Sull'immagine appena costruita, `bash test/smoke.sh` → **25 passati, 6 falliti**. Il 22/08 era 31/0.
+Nel mezzo non c'è una riga di codice cambiata: c'è **la ricostruzione dell'immagine**.
+
+I sei rossi sono un guasto solo contato sei volte. `test/collab-edit.mjs` accende un secondo client
+Yjs vero *dentro* il container (`docker exec ... node /app/test/collab-edit.mjs`) e importa
+`@hocuspocus/provider`, che sta fra le **devDependencies** e nell'immagine (`npm ci --omit=dev`) non
+c'è → `ERR_MODULE_NOT_FOUND`. Cade il check della collab, e con lui le **cinque** verifiche di
+history che controllano le versioni *prodotte da quell'edit*. La sesta di history — il 401 senza
+sessione — infatti passa, perché è l'unica che non dipende dall'edit.
+
+**Non è un problema dell'app**: il browser quel pacchetto non lo installa, ce l'ha già dentro
+`public/vendor/codemirror.js`, impacchettato da esbuild e committato. Al server serve
+`@hocuspocus/server`, che è una `dependency` vera. Manca solo **al test**, che non è un browser e
+quindi il bundle non può usarlo. (E la collab, provata a mano nel browser lo stesso giorno, funziona.)
+
+### Perché era verde prima — la parte che vale il giro
+
+Il buco era **già annotato nel diario a luglio**, ma come cosa del VPS. Qui sul Mac era verde, e la
+ragione è che l'immagine locale era ferma al **5 luglio**. Ricostruita la storia guardando dentro la
+vecchia immagine, rimasta appesa come `<none>`:
+
+- l'immagine del 5 luglio ha **91** pacchetti in `node_modules`, `@hocuspocus/provider` compreso;
+  quella di oggi ne ha **83**, senza;
+- il `provider` sta fra le devDependencies **dal commit che l'ha introdotto** (`0595687`, 5 luglio),
+  quindi non è che le dipendenze siano state riorganizzate dopo;
+- il `.dockerignore` è nato il **12 luglio** (`5d00510`, insieme allo stack di produzione). Prima non
+  c'era, e il `COPY . .` si portava dentro il `node_modules` dell'host — **completo, devDeps
+  incluse** — sopra al layer di `npm install --omit=dev`.
+
+Cioè: **lo smoke passava grazie a un difetto.** Le dev-deps stavano nell'immagine per lo stesso
+motivo per cui ci sarebbe potuto finire un `.env` — ed è precisamente quel difetto che il
+`.dockerignore` è venuto a chiudere. La correzione di sicurezza del 12 luglio ha rotto il test lo
+stesso giorno; il test però ha continuato a dire 31/0 **per sei settimane**, perché in dev l'immagine
+non la ricostruisce nessuno e quella vecchia stava lì a raccontare com'era il mondo prima.
+
+**Da tenere, ed è la cosa più utile di questo giro**: un test verde non dimostra che il codice è a
+posto, dimostra che *nulla di ciò da cui dipende è cambiato* — e un'immagine Docker mai ricostruita è
+una dipendenza che invecchia in silenzio. Il momento in cui il semaforo dice la verità è quando
+l'immagine è fresca; se lo si interroga solo dal dev, si sta interrogando il passato.
+
+### La correzione
+
+Sistemato, non annotato: un test che dà 25/31 «ma sei sono noti» ha smesso di essere un semaforo,
+perché quando i rossi diventeranno sette non se ne accorgerà nessuno. Ed è già la seconda volta che
+la nota da sola non regge.
+
+- **`test/Dockerfile.test`** (nuovo): `FROM $BASE` + `npm ci`. È `FROM` l'immagine dell'app, quindi
+  codice e dipendenze di runtime restano gli **stessi layer**: i pacchetti in più sono solo presenti,
+  `server.js` non li importa mai. Il commento in testa spiega il perché, che è l'unico posto dove lo
+  leggerà chi ci ricasca.
+- **`test/smoke.sh`**: si costruisce da sé quell'immagine a ogni giro (`TEST_IMAGE`, default
+  `$IMAGE-test`), e ci gira sopra. Aggiunta una **guardia** sull'immagine di base: se non esiste, lo
+  dice e ti elenca quelle che hai, invece di lasciare un errore di docker a caso — che chiude anche
+  l'altro inciampo annotato a luglio (sul VPS il default `alumdocs-app` puntava a un nome sparito).
+
+Scartata la scorciatoia di spostare `@hocuspocus/provider` fra le `dependencies`: si porterebbe roba
+del client dentro l'immagine di produzione per sempre, solo per far contento un test.
+
+**Il compromesso, detto**: così si testa un'immagine che non è byte-identica a produzione. La
+deviazione è inerte (stessi layer, pacchetti in più mai importati), e l'alternativa pulita — il peer
+Yjs fuori dal container — vorrebbe Node sull'host, che è il vincolo che dà forma a tutto il resto qui.
+
+### Verificato
+
+- `bash test/smoke.sh` **a mano nudo, senza `IMAGE=`** → **31 passati, 0 falliti**, con l'immagine di
+  test cancellata prima: **22 secondi** build inclusa, 18 al secondo giro (layer `npm ci` in cache).
+- Guardia: `IMAGE=alumdocs-inesistente` → messaggio chiaro, elenco immagini, exit 1.
+- `bash -n` pulito. `README.md` e `DEPLOY.md` non nominano lo smoke: niente da riallineare.
+- Dev rimesso su e intatto (lo smoke gira isolato su :3100 con dati temporanei).
+
+### Coda: il backup, e cosa è davvero irreproducibile
+
+La cartella su Desktop conteneva `images.tar` (1,06 GB), il dump del volume
+`alumdocs_alumere-data.tar.gz` (**99 KB**) e un file di ref git di un altro repo. Il `rm -rf`
+suggerito avrebbe portato via anche il secondo — ed è l'unico dei tre che conta: **l'immagine si
+ricostruisce dal Dockerfile in pochi minuti, il volume no.** Alla fine l'altra sessione ha cancellato
+tutto prima che si potesse spostare il dump; nessun danno, l'originale non è stato toccato e i due
+progetti sono lì, ma la rete di sicurezza al momento non c'è. Rifarla è un comando:
+
+```
+docker run --rm -v alumdocs_alumere-data:/data -v ~/Nextcloud:/out alumdocs-app \
+  tar czf /out/alumere-data-$(date +%F).tar.gz -C /data .
+```
+
+**Per le prossime pulizie**: il volume `alumdocs_alumere-data` non si tocca, e niente
+`docker system prune --volumes`.
+
+### Cosa resta
+
+- **Non è live**: adesso sono **quattro** i giri che aspettano — 19, 20, 21 e questo.
+- Il backup del volume, da rifare quando si decide dove tenerlo.
+
+---
+
 ## 2026-08-22 — Giro 21: la favicon, e due modi diversi di sparire in silenzio ✅ (check di Tommy OK)
 
 Una richiesta sola e piccola — l'app non aveva un'icona nella scheda del browser — e due guasti che
