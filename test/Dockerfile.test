@@ -1,0 +1,23 @@
+# Alumère — immagine per lo smoke test: quella dell'app, più le devDependencies.
+#
+# Perché esiste: `test/collab-edit.mjs` accende un secondo client Yjs vero DENTRO il
+# container (`docker exec ... node /app/test/collab-edit.mjs`) e importa
+# `@hocuspocus/provider`, che è una devDependency — quindi nell'immagine dell'app,
+# buildata `npm ci --omit=dev`, non c'è. Senza questo strato cadono 6 check a
+# prescindere dallo stato dell'app: quello della collab, più le 5 verifiche di history
+# che dipendono dal suo edit. (Il browser quel pacchetto non lo installa: ce l'ha già
+# dentro `public/vendor/codemirror.js`, impacchettato da esbuild. Serve solo al test,
+# che non è un browser e quindi il bundle non può usarlo.)
+#
+# È `FROM` l'immagine dell'app: codice e dipendenze di runtime restano gli STESSI
+# layer, i pacchetti in più sono solo presenti e `server.js` non li importa mai. Per
+# questo si può testare qui senza allontanarsi da ciò che gira in produzione.
+#
+# Non va lanciata a mano: se la costruisce `test/smoke.sh` a ogni giro (il layer resta
+# in cache finché non cambia il lock).
+
+ARG BASE=alumdocs-app
+FROM ${BASE}
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci

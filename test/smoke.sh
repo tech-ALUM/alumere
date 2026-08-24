@@ -5,12 +5,20 @@
 # (versioni, contenuti, etichette, gate 401), compile LaTeX e GC dei blob orfani.
 #
 # Uso:   bash test/smoke.sh
-# Env:   IMAGE (default alumdocs-app) · SMOKE_PORT (default 3100)
+# Env:   IMAGE (default alumdocs-app) · TEST_IMAGE (default "$IMAGE-test") ·
+#        SMOKE_PORT (default 3100)
+#
+# NB: NON gira sull'immagine dell'app così com'è. `test/collab-edit.mjs` importa
+# `@hocuspocus/provider`, che è una devDependency e nell'immagine (`npm ci --omit=dev`)
+# non c'è: senza, 6 check cadono a prescindere dallo stato dell'app. Lo script si
+# costruisce da sé l'immagine con le dev-deps (`test/Dockerfile.test`, che è `FROM
+# $IMAGE`) e gira su quella — vedi il Dockerfile per il perché in dettaglio.
 #
 # Richiede solo docker + curl + python3 sull'host (niente Node locale). Esce 0 se
 # tutti i controlli passano, 1 altrimenti.
 set -u
 IMAGE=${IMAGE:-alumdocs-app}
+TEST_IMAGE=${TEST_IMAGE:-${IMAGE}-test}
 PORT=${SMOKE_PORT:-3100}
 NAME=alumere-smoke
 BASE="http://localhost:$PORT"
@@ -24,12 +32,28 @@ json() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/nu
 cleanup() { docker rm -f $NAME >/dev/null 2>&1; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-echo "— avvio container isolato ($IMAGE su :$PORT, dati temporanei)"
+# L'immagine di base deve esistere. Il default `alumdocs-app` è il nome che le dà
+# `docker compose build` qui, ma su un'altra macchina può benissimo non esserci (già
+# successo sul VPS): meglio dirlo subito e chiaro che lasciare un errore di docker.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "immagine di base «$IMAGE» non trovata."
+  echo "Costruiscila con \`docker compose build\`, oppure indica quella giusta con"
+  echo "IMAGE=<nome>. Immagini presenti qui:"
+  docker images --format '  · {{.Repository}}:{{.Tag}}' | grep -v '<none>' || true
+  exit 1
+fi
+
+echo "— immagine di test ($TEST_IMAGE = $IMAGE + devDependencies)"
+docker build -q -f "$REPO_DIR/test/Dockerfile.test" --build-arg BASE="$IMAGE" \
+  -t "$TEST_IMAGE" "$REPO_DIR" >/dev/null \
+  || { echo "build dell'immagine di test fallita"; exit 1; }
+
+echo "— avvio container isolato ($TEST_IMAGE su :$PORT, dati temporanei)"
 docker rm -f $NAME >/dev/null 2>&1
 docker run --rm -d --name $NAME -p "$PORT:$PORT" \
   -e PORT="$PORT" -e PROJECTS_DIR=/data/projects \
   -v "$REPO_DIR":/app -v /app/node_modules -v "$TMP/data":/data \
-  -w /app "$IMAGE" node server.js >/dev/null || { echo "docker run fallito"; exit 1; }
+  -w /app "$TEST_IMAGE" node server.js >/dev/null || { echo "docker run fallito"; exit 1; }
 
 for _ in $(seq 1 30); do curl -sf "$BASE/api/session" >/dev/null && break; sleep 1; done
 curl -sf "$BASE/api/session" >/dev/null || { echo "il server non risponde su $BASE"; docker logs $NAME; exit 1; }
