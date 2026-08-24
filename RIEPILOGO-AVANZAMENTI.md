@@ -124,10 +124,40 @@ docker run --rm -v alumdocs_alumere-data:/data -v ~/Nextcloud:/out alumdocs-app 
 **Per le prossime pulizie**: il volume `alumdocs_alumere-data` non si tocca, e niente
 `docker system prune --volumes`.
 
+### Il buco vero: sul server non c'è nessun backup automatico
+
+La cartella cancellata sul Desktop era roba locale e trascurabile. Ma la domanda che ha aperto vale
+per il server, e lì la risposta di oggi è: **il comando c'è, il backup no.**
+
+I progetti sul VPS vivono nel volume dello stack ALUM (`alumere_alumere-data`, vedi `docker volume ls`
+sulla macchina), che ne è **l'unica copia**: `data/` è git-ignorato, nel repo non c'è niente, e un
+rebuild dell'immagine non rigenera un bel niente di quel contenuto — file `.tex`, `meta.json`, i
+`doc.ystate` di Yjs, gli oggetti della history, `users.json` e il `.session-secret`.
+
+`DEPLOY.md` documenta il comando in due punti (righe ~174 e ~247) e documenta anche il ripristino
+(`tar xzf … -C /data` su un volume vuoto, ad app ferma). Ma è **un comando da lanciare a mano**:
+niente di schedulato, nessuna rotazione, nessun posto stabilito dove finiscono le copie. Finché non
+ci sono progetti veri va benissimo così — è la stessa decisione consapevole già presa per la
+sicurezza delle letture. **Cambia il giorno in cui qualcuno carica documenti veri**: da lì dentro quel
+volume c'è il lavoro di altre persone, e «c'è il comando nel runbook» non è un backup, è l'istruzione
+per farne uno.
+
+**Da decidere (Tommy ne parla direttamente con Albi, che è l'unico con accesso al VPS — 24/08):**
+
+- **chi** lo lancia e **ogni quanto** (un `cron` settimanale sarebbe già mille volte meglio del nulla);
+- **dove** finiscono le copie — non sulla stessa macchina, altrimenti proteggono da `docker volume rm`
+  ma non da un VPS che muore;
+- **quante** se ne tengono (una rotazione: una copia sola sovrascritta ogni volta non protegge da un
+  danno accorto in ritardo — ci si porta dietro la corruzione);
+- e la parte che salta sempre: **provare un ripristino**. In questo diario non risulta che il
+  `tar xzf` sia mai stato eseguito davvero. Un backup mai ripristinato non è un backup, è un'ipotesi.
+
 ### Cosa resta
 
-- **Non è live**: adesso sono **quattro** i giri che aspettano — 19, 20, 21 e questo.
-- Il backup del volume, da rifare quando si decide dove tenerlo.
+- **Non è live**: adesso sono **quattro** i giri che aspettano — 19, 20, 21 e questo. (Il redeploy lo
+  fa Albi, come sempre: qui si segnala e basta.)
+- **Backup del volume sul server**: la decisione qui sopra, in mano a Tommy e Albi.
+- Il dump del volume **locale**, minore, da rifare se e quando si decide dove tenerlo.
 
 ---
 
