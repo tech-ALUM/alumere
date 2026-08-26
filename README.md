@@ -6,10 +6,12 @@ from scratch in an editor that **suggests LaTeX commands as you type**, see the
 the left**. Documents are compiled with a **real LaTeX engine** (`latexmk` +
 TeX Live) on the server.
 
-This is a working **prototype / bozza**: a **shared project library** with
-persistent server-side storage and a real LaTeX editor. Real-time collaboration
-and per-user accounts are the documented next steps (see *Roadmap* below); this
-draft lays the foundation they plug into.
+This is a working **draft / bozza**, but no longer a thin one: a **shared project
+library** with persistent server-side storage, **real-time collaboration** (Yjs —
+several people in the same file, live, with cursors and presence), **version
+history** with diff and restore, and **passwordless magic-link sign-in** on every
+read and write. What's still missing to call it a finished product is a real
+database and per-project access control (see *Roadmap* below).
 
 ---
 
@@ -121,6 +123,20 @@ docker compose -f docker-compose.dev.yml up           # subsequent runs
   **Download PDF** saves the result.
 - **Engine selector.** Choose pdfLaTeX, XeLaTeX or LuaLaTeX. **The default engine
   is XeLaTeX** (good Unicode and system-font support out of the box).
+- **Working together (topbar).** Avatars show who else is in the project, with
+  colored cursors and selections in the editor and a live connection state. Text
+  **saves itself continuously** — there is no Save button and nothing to press.
+- **Review and Chat (left rail).** **Review** holds Word-style comments anchored
+  to a selection, split into **Open** / **Resolved**, with threaded replies.
+  **Chat** is a per-project conversation. Both take **@mentions**.
+- **History.** Versions are snapshotted as people write: timeline with author,
+  per-file diff, and restore. **📌 Checkpoint** pins a named version that later
+  saves won't move.
+- **Spell check.** Unknown words are underlined as you type; right-click for
+  suggestions or **Add to project dictionary** — custom words are shared with
+  everyone in the project, live.
+- **SyncTeX, both ways.** Jump from the cursor to the matching place in the PDF,
+  and double-click the PDF to jump back to the source.
 
 The app ships with a small sample project (`main.tex`, `sections/`,
 `references.bib`) so it compiles something the moment it loads.
@@ -146,14 +162,18 @@ The compile runs against the TeX distribution available to the server:
 
 ## Projects & persistence
 
-Projects live **on the server**, in a simple filesystem store — a shared library,
-so everyone using the instance sees the same projects (no accounts yet; intended
-for a trusted group).
+Projects live **on the server**, in a simple filesystem store — a shared library:
+**everyone signed in sees every project**. Signing in is required for every read
+and write (passwordless magic-link, restricted to your company email domain — see
+*Notes* below), but there is **no per-project access control yet**, so the instance
+is still meant for a trusted group.
 
-- **Archive (home page).** Lists every project as a card. **Carica .zip** uploads
-  an existing LaTeX project (a common top-level folder inside the zip is stripped
-  automatically). Open a card to edit it, or delete it. A **Sample paper** is
-  seeded on first run so the library isn't empty.
+- **Archive (home page).** Lists every project as a row; click one to edit it.
+  **New project ▾** creates an empty one or **uploads an existing `.zip`** (a
+  common top-level folder inside the zip is stripped automatically). Rows can be
+  searched, tagged, **archived**, and moved to the **Trash** — removal is two-step,
+  and only from the Trash view is a project destroyed for good. A **Sample paper**
+  is seeded on first run so the library isn't empty.
 - **Storage layout.** Each project is a folder under `PROJECTS_DIR`
   (default `data/projects`): `meta.json` (name + timestamps) and `files/` (the
   LaTeX tree). Alongside them sit things that are *about* the project but are not
@@ -166,14 +186,25 @@ for a trusted group).
 - **Project names are unique.** Creating or renaming a project to a name already
   in use is refused (case-insensitive). A zip upload auto-suffixes instead —
   `Thesis (2)` — since the bytes are already on the server.
-- **Saving.** The editor saves to the server with the **Save** button, and also
-  auto-saves on every **Recompile** (`Ctrl/Cmd+S`). Binary assets (images) are
-  preserved but not editable in the text editor.
+- **Saving.** There is nothing to save: every keystroke goes into the shared
+  document, and the server persists it on a debounced hook. The topbar says
+  *auto-save* instead of offering a button. `Ctrl/Cmd+S` is left bound to
+  **Recompile**, since that's the only thing still worth asking for by hand.
+  Binary assets (images) are preserved but not editable in the text editor.
 
-> **Concurrency caveat (draft).** Saving a project **replaces its whole file set**
-> on the server (last-write-wins). If two people save the same project around the
-> same time, the later save overwrites the earlier one — there is no merge or
-> locking yet. Real-time collaboration (see *Roadmap*) is what addresses this.
+> **How concurrent editing works.** Editing runs through **one Yjs document per
+> project** (CRDT): two people in the same file merge character by character
+> instead of overwriting each other, and the old last-write-wins behaviour is gone
+> from the editor. The server keeps the live doc in `doc.ystate` and materializes
+> `files/` from it on a debounced store hook, which is also what feeds compiles,
+> zips and history versions.
+>
+> One sharp edge is left, and it lives in the API rather than the UI:
+> `PUT /api/projects/:id` still **replaces a project's whole file set** (it does an
+> `rm -rf` on `files/`). Nothing in the app calls it any more, but a script that
+> does will clobber whatever people are typing. The endpoint deliberately deletes
+> `doc.ystate` afterwards, so the next open re-seeds from disk instead of
+> resurrecting the pre-overwrite content.
 
 ### API (for reference)
 
@@ -182,24 +213,34 @@ for a trusted group).
 | `GET` | `/api/projects` | List projects |
 | `GET` | `/api/projects/:id` | Load a project's file tree |
 | `POST` | `/api/projects/upload` | Create a project from an uploaded `.zip` |
-| `PUT` | `/api/projects/:id` | Save a project's files |
+| `PUT` | `/api/projects/:id` | Replace a project's whole file set (see the caveat above) |
 | `DELETE` | `/api/projects/:id` | Delete a project |
 | `POST` | `/api/compile` | Compile the supplied files, return PDF + log |
+
+This is a subset — the server also exposes auth/session, history, tags,
+archive/trash, mentions and last-build endpoints, plus the `ws /collab` socket.
+`server.js` is the authoritative list.
 
 ---
 
 ## How it works (so anyone can pick it up)
 
-1. The **whole project lives in the browser** as a file tree.
-2. On **Recompile**, the front-end sends every file to `POST /api/compile`.
+1. The project lives in a **shared Yjs document**, one per project, kept on the
+   server and replicated live into every open browser — that's what the file tree
+   and the editor render.
+2. On **Recompile**, the front-end sends every file from that document to
+   `POST /api/compile`.
 3. The server writes them to a temporary folder, runs
    `latexmk -interaction=nonstopmode -halt-on-error` (shell-escape disabled for
    safety), and returns the PDF (base64) plus the log.
 4. The browser shows the PDF in the preview pane.
 
-The **compile** endpoint is **stateless** — it stores nothing between compiles —
-which keeps that path simple. Persistence is handled separately by the project
-store (`/api/projects`, backed by `PROJECTS_DIR`).
+The compile itself is **throw-away**: a fresh temp folder per request, deleted
+afterwards, with nothing carried from one compile to the next. What it does keep
+is the **result** — on success it stores the PDF, the SyncTeX map and the log as
+the project's *last build*, which is what you see the moment you open a project.
+Persisting the **content** is a separate path again: the Yjs store hook, which
+materializes `files/` under `PROJECTS_DIR`.
 
 ---
 
@@ -222,21 +263,26 @@ runbook (Caddy reverse proxy with automatic TLS + `docker-compose.prod.yml`).
 
 ## Roadmap (turning the draft into the full product)
 
-This matches the architecture decision the team agreed:
+This matches the architecture decision the team agreed. Items 1 and 3 are
+**done**; item 2 is the one still open.
 
-1. **Real-time collaboration** — add **Yjs** (CRDT) with the **Hocuspocus**
-   server and bind it to the CodeMirror editor, so multiple people edit the same
-   file live, with cursors. This is the headline feature and the next big step —
-   and it's what removes the last-write-wins limitation above. *An **M0 spike** is
-   already wired up: the server relays a shared document over `ws /collab`, and
-   `public/collab.html` (open it in two tabs) proves live sync + colored cursors
-   labeled by the signed-in user. Binding this into the real per-file editor is the
-   next milestone (M1).*
-2. **Accounts & projects** — logins and a database (PostgreSQL) so projects
-   persist and can be shared between members, with real access control instead of
-   one shared library.
-3. **Polish** — SyncTeX (click PDF ↔ jump to source), version history, image
-   uploads, autosave, and a switch to PDF.js for richer preview control.
+1. **Real-time collaboration** — ✅ **done (M1 + M2).** **Yjs** (CRDT) over
+   **Hocuspocus**, bound to the CodeMirror editor: one shared document per project
+   over `ws /collab`, live multi-file editing with colored cursors and presence
+   avatars, persisted to `doc.ystate`. On top of it sits **version history** —
+   content-addressed snapshots per save, with a timeline, per-file diff, labels,
+   restore, retention and blob GC. (`public/collab.html`, the original **M0**
+   two-tab spike, is still in the tree as a minimal reproduction of the transport.)
+2. **Accounts & projects** — 🚧 **half done.** Sign-in exists and is enforced
+   everywhere (passwordless magic-link, company-domain allowlist, users in
+   `users.json`). What's missing is the rest of the item: a **database**
+   (PostgreSQL) instead of the filesystem store, a **per-person allowlist**, and
+   **per-project access control** so a project can be shared with some members
+   rather than with everyone on the instance.
+3. **Polish** — ✅ **done.** SyncTeX (click PDF ↔ jump to source), version
+   history, image uploads (drag & drop onto the tree, or **Add files**), autosave
+   (continuous, via the Yjs store hook), and PDF.js for the preview
+   (`public/vendor/pdfjs`).
 
 ---
 
