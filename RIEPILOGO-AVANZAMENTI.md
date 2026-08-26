@@ -7,6 +7,78 @@
 
 ---
 
+## 2026-08-26 — Il README era indietro di due milestone ✅ (riletto, ok di Tommy)
+
+Giro di sola prosa, nato da una segnalazione della chat "normale" di Claude che stava leggendo il
+repo: il `README.md` **si contraddice al proprio interno**. Verificato riga per riga, ed era vero.
+
+### Le quattro contraddizioni di partenza
+
+| Il README diceva | Ma | Verificato in |
+|---|---|---|
+| "shared library… **no accounts yet**" | dodici righe più giù, nelle Notes: "every read/write… require a signed-in user" | `requireUser` su tutte le route, `server.js` |
+| *concurrency caveat*: salvare sostituisce tutto, **last-write-wins** | M1 ha portato l'editor su Yjs, ed è lì che il last-write-wins è sparito (riga 3192 di questo diario) | un `Y.Doc` per progetto |
+| Roadmap 1: real-time è "the next big step", **c'è solo la M0** | M1 il 5 luglio, M1 Step 2 e M2 il 16 | history con timeline, diff e ripristino |
+| Roadmap 3 "Polish": SyncTeX, history, upload immagini, autosave, PDF.js **da fare** | tutti e cinque fatti | `server.js:1199`, `app.js:453`, `app.js:1135`, `public/vendor/pdfjs` |
+
+### Poi ne sono uscite altre cinque, ed è la parte che conta
+
+Riscrivendo le sezioni intorno, altre cinque frasi si sono rivelate **non incomplete ma false**:
+
+- *"The compile endpoint is **stateless** — it stores nothing between compiles"*: non lo è più.
+  `saveLastBuild()` (`server.js:1283`) tiene PDF, mappa SyncTeX e log come *last build* del progetto
+  — cioè proprio il meccanismo che fa comparire il PDF appena apri.
+- *"The **whole project lives in the browser** as a file tree"*: vive nel Y.Doc sul server, il
+  browser ne ha una replica. `flattenForCompile()` (`app.js:207`) legge da lì, non da un albero locale.
+- *"The editor saves to the server with the **Save** button"*: quel pulsante **non esiste più** in
+  `editor.html` — zero occorrenze. Al suo posto l'etichetta *auto-save*, col tooltip "there's nothing
+  to press".
+- *"Lists every project as a **card**"*: sono righe (`archive.js:284`).
+- *"**Carica .zip** uploads an existing project"*: il pulsante è **New project ▾ → Upload project
+  (.zip)** (`index.html:45`).
+
+**Da tenere**: la differenza fra un README incompleto e un README falso non è di grado. Un buco chi
+legge lo colma aprendo il codice; una frase sbagliata **la crede**, perché non ha motivo di
+verificarla. Le prime quattro erano contraddizioni — visibili a chi legge il file intero. Queste
+cinque no: prese da sole suonano benissimo, ed è per questo che sono sopravvissute.
+
+Il parallelo col giro 22 è esatto, e vale la pena scriverlo perché è la stessa forma due volte in tre
+giorni: là un test verde non dimostrava che il codice era a posto, dimostrava che *nulla di ciò da cui
+dipendeva era cambiato*; qui un README non riletto non dimostra che è giusto, dimostra solo che
+nessuno l'ha aperto. In entrambi i casi il difetto è nato da una correzione fatta bene (il
+`.dockerignore` il 12 luglio, M1 il 5) e ha vissuto **sei settimane** in silenzio, perché il segnale
+che avrebbe dovuto suonare era proprio quello rimasto fermo al mondo di prima. Ironia utile: il
+"Verificato" del giro 22 dice *«README.md e DEPLOY.md non nominano lo smoke: niente da riallineare»* —
+giusto sullo smoke, e nel frattempo il resto del file era vecchio di due milestone.
+
+### La punta scoperta che invece resta vera, spostata dove sta davvero
+
+Il caveat sul last-write-wins non è stato cancellato, è stato **rimesso al suo posto**:
+`PUT /api/projects/:id` fa ancora `rm -rf` su `files/` e poi cancella `doc.ystate` (`server.js:697`)
+perché il prossimo open riparta dal disco. Dal client non lo chiama più **nessuno** — cercato in tutto
+`public/`, zero — ma un domani uno script sì. Quindi il caveat resta scritto, dichiarato come punta
+dell'**API**, non del prodotto.
+
+### Verificato
+
+- Ogni affermazione nuova letta nel codice prima di scriverla, non a memoria.
+- Cercati e **non** trovati i "preferiti"/progetti stellati: stavo per documentarli. Il *preferiti*
+  del commit della favicon (giro 21) sono i **segnalibri del browser**, non una funzione dell'app.
+- Solo prosa: nessun file di codice toccato, niente da ricompilare, **nessun redeploy**. I giri che
+  aspettano di andare live restano quattro (19, 20, 21, 22): questo non si aggiunge alla lista.
+
+### Cosa resta
+
+- **L'albero "What's in the box"** è ancora incompleto (mancano `collab.html`, `auth.js`, `theme.js`,
+  `spell-worker.js`, `vendor/pdfjs`, `test/`, `redeploy.sh`). **Deciso di non aggiornarlo** (26/08):
+  un elenco di file in un README è un debito che si paga a ogni file nuovo e dà a chi legge quello che
+  `ls` gli dà gratis e sempre aggiornato. Se un giorno si tocca, la mossa è **potarlo** ai file che
+  spiegano l'architettura, non completarlo.
+- La tabella API resta un sottoinsieme di sei endpoint su una trentina — ma ora **lo dichiara**,
+  invece di sembrare completa.
+
+---
+
 ## 2026-08-24 — Giro 22: il test che era verde per sbaglio ✅ (check delegato: ok di Tommy sul 31/31)
 
 Giro non pianificato. Un'altra sessione di Code stava liberando spazio, ha spento e riacceso Docker
