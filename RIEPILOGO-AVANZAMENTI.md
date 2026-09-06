@@ -7,6 +7,182 @@
 
 ---
 
+## 2026-09-06 — Giro 23: la prima tesi vera, e cinque modi di fallire senza dirlo ✅ (check di Tommy OK)
+
+Tommy ha caricato lo zip di una tesi vera del PoliMi — 50 pagine, 46 pacchetti, bibliografia,
+nomenclatura, acronimi — e ha chiesto due cose: cartelle chiuse nel file tree, e «perché qui ho
+errori che su Overleaf non ho». La seconda domanda ha aperto una catena di **cinque** guasti
+distinti, e nessuno dei cinque era visibile finché il precedente non veniva risolto.
+
+### ① File tree: cartelle chiuse (la parte semplice)
+
+Il `Set` si chiamava `collapsed` e conteneva le cartelle che l'utente aveva **chiuso**: default
+aperto. Ora si chiama `expanded` e contiene quelle che ha **aperto**: default chiuso (`app.js:111`).
+Sei punti d'uso, semantica invertita. L'`outlineClosed` del *File outline* non è stato toccato —
+lì il default aperto è quello giusto, e Tommy l'ha chiesto esplicitamente.
+
+La conseguenza che il cambio si tira dietro, e che vale più dell'inversione: **con tutto chiuso, un
+file annidato aperto da un tab ripristinato o da un salto al collega sarebbe invisibile**. Quindi
+`revealInTree()` (`app.js:114`), che apre **solo gli antenati** del file aperto, non l'albero. Un
+`expand-all` implicito avrebbe rimesso in piedi il muro di righe che il giro voleva togliere.
+Verificato al ritorno da un reload completo con `expanded` vuoto: aperte solo `Sections` e
+`Appendices`, cioè esattamente il percorso di `b.shapiro.tex`, tutto il resto chiuso.
+
+Rinomina e cancellazione di una cartella ora rimappano/puliscono anche i **discendenti** aperti
+(`app.js:414`, `app.js:440`); prima si trattava solo la cartella stessa. Con la vecchia semantica
+una voce stale riapriva una sottocartella, con la nuova la chiudeva: stesso bug, verso opposto,
+tanto valeva chiuderlo.
+
+### ② La catena dei cinque guasti — e perché sono usciti uno per volta
+
+L'errore visibile era `File 'biblatex.sty' not found`. Sotto ce n'erano altri quattro:
+
+| # | Cosa mancava | Dove sta | Come si manifestava |
+|---|---|---|---|
+| 1 | `biblatex.sty` | `texlive-bibtex-extra` | l'errore visibile |
+| 2 | `biber` | pacchetto Debian a sé | PDF **senza bibliografia**, in silenzio |
+| 3 | `listofitems.sty` | `texlive-plain-generic` | comparso solo dopo il ① |
+| 4 | il **motore** | non è un pacchetto | vedi sotto |
+| 5 | `epstopdf` + Ghostscript | `texlive-font-utils` + `ghostscript` | riquadri col nome del file |
+
+Il ② è quello da ricordare: `bibtex` c'era, e sembra la stessa cosa. Non lo è — `backend=biber` di
+biblatex vuole *quel* binario. Se avessi aggiunto solo `biblatex.sty` avrei ottenuto un documento
+che **compila** e non ha la bibliografia: peggio di uno che fallisce, perché non fa rumore.
+
+Il ③ è la forma pura del difetto di un sottoinsieme curato: `listofitems` è una dipendenza di
+`stackengine` e sta in `texlive-plain-generic` perché è generic-TeX, non LaTeX. Nessun set
+`texlive-latex-*` lo contiene, e nessuno lo avrebbe indovinato leggendo il preambolo.
+
+### ③ Il motore: la warning ERA l'errore, con un'ora di anticipo
+
+Anche con tutti i pacchetti, sotto XeLaTeX la compilazione moriva a `Thesis.tex:72` su
+`\transparent` *undefined*. La causa stava scritta due righe sopra gli errori, fra le warning che
+sembravano rumore di fondo:
+
+> `Loading aborted, because pdfTeX is not running in PDF mode`
+
+Il pacchetto `transparent` funziona **solo** con pdfTeX. Sotto XeLaTeX si carica, si arrende, e
+lascia `\transparent` non definito — poi non fallisce lì: fallisce venti righe dopo, quando il
+frontespizio prova a usarlo. Chi legge il log vede l'*Emergency stop* nel frontespizio e cerca il
+guasto nel frontespizio.
+
+**Da tenere**: in un log LaTeX la distanza fra la causa e il sintomo è normale, e una warning che
+dice «mi sto arrendendo» è una causa, non un avviso. Il giro 21 (la favicon) e il giro 22 (lo smoke
+verde) erano due modi di sparire in silenzio; questo è il terzo, e il più insidioso, perché il
+segnale c'era e l'abbiamo letto come rumore.
+
+Il default è passato a **pdfLaTeX**, che è anche quello di Overleaf e quello contro cui sono scritti
+i documenti che la gente importa (`\usepackage[utf8]{inputenc}` e `transparent` sono entrambi idiomi
+pdfLaTeX). Cambiato nel selettore (`editor.html:79`), nel body della `/api/compile` e nel suo
+fallback, **e** nel `GET /api/projects/:id/pdf` dell'archivio (`server.js:915`) che aveva xelatex
+cablato: lasciarlo lì avrebbe dato un «Scarica PDF» che produce un documento diverso da quello
+dell'editor. Prima del cambio, controllato che **tutti e tre i progetti esistenti compilano con
+pdfLaTeX** (exit 0) e che nessuno usa `fontspec`: il cambio non rompe niente di ciò che c'è.
+
+Il prezzo, dichiarato nel README: un documento che ha davvero bisogno di XeLaTeX ora fallisce al
+primo colpo e va cambiato a mano. Ed è il momento di dire la punta che resta scoperta: **la scelta
+del motore non è ricordata** — né in `localStorage` né nel `meta.json`. Ogni apertura riparte dal
+default. Finché il default è quello giusto per quasi tutti non morde, ma il giorno che qualcuno ha
+un documento XeLaTeX se ne accorge a ogni reload.
+
+### ④ Gli EPS: `graphicx` che ripiega su "draft setting" e non lo chiama errore
+
+Due immagini del frontespizio non comparivano: al loro posto un riquadro col **nome del file scritto
+dentro**. Sono le uniche due `.eps` del progetto (le altre sono `.png`/`.jpg`, e infatti si vedevano
+tutte). pdfLaTeX l'EPS non lo legge: lo fa convertire al volo da `epstopdf`, che chiama
+**Ghostscript**. Nell'immagine non c'era nessuno dei due, e il server passava `-no-shell-escape`,
+che spegne anche il canale ristretto con cui pdfLaTeX chiama `repstopdf`. Tre anelli, tutti e tre
+rotti.
+
+Nel log la riga è `File '…-eps-converted-to.pdf' not found: using draft setting.` — **e la
+compilazione esce 0**. È la stessa famiglia della favicon del giro 21: la pagina risulta costruita,
+il logo è un rettangolo, niente segnala nulla.
+
+**La scelta di sicurezza, presa in modo esplicito.** Togliere `-no-shell-escape` non accende lo
+shell-escape pieno: riattiva quello **ristretto**, dove `shell_escape=p` in `texmf.cnf` limita
+`\write18` a una whitelist fissa (`bibtex`, `kpsewhich`, `makeindex`, `repstopdf`, …) — verificata
+nel container, non assunta. `-shell-escape` pieno resta spento. È la configurazione sotto cui
+compila Overleaf. Il costo reale c'è ed è scritto in `server.js:1256`: **un `.eps` ostile ora
+raggiunge Ghostscript**, che di CVE ne ha avute; gira con `-dSAFER`, dentro il container, sotto i
+60s di `COMPILE_TIMEOUT_MS`. Il commento è lungo apposta: chi lo rilegge fra sei mesi deve trovare
+il ragionamento, non un flag sparito senza spiegazione. L'alternativa scartata era pre-convertire
+gli EPS lato server tenendo il flag: più codice, stessa resa, e Ghostscript sui file dell'utente lo
+si esegue comunque.
+
+### ⑤ La nomenclatura: due cause, una nostra e una nel documento
+
+`\printnomenclature` non stampava niente. Nel log, a ogni passata: `Missing input file 'Thesis.nls'`.
+
+**Causa nostra**: `latexmk` insegue `.aux` e `.bcf` ma non conosce il `.nlo → .nls` di `nomencl`.
+Aggiunta la regola del manuale come `/opt/alumere/latexmkrc`, passata dal server con `-r` — e solo
+se il file esiste (`server.js:1252`), così fuori da Docker latexmk non si rifiuta di partire.
+Tenuta come file passato dal codice invece che appesa a `/etc/LatexMk`, perché la dipendenza deve
+essere visibile dove viene usata.
+
+**Causa nel documento, e da sola bastava a fermare tutto**: con la regola attiva `makeindex` girava
+e rispondeva `0 entries accepted, 92 rejected`, ogni riga *"Illegal page number"*. Il colpevole era
+`\renewcommand{\thepage}{}` a `Thesis.tex:98` — una riga che sta **dopo** la nomenclatura e riguarda
+la bibliografia. Tommy ha giustamente obiettato che non poteva c'entrare.
+
+C'entra, e il motivo merita di stare qui: **in TeX il punto in cui legge e il punto in cui stampa
+non sono lo stesso punto.** `\nomenclature` non scrive la pagina quando la incontra: accoda una
+scrittura differita, e `\thepage` viene espanso allo *shipout*. `\renewcommand` invece agisce subito
+e globalmente. Col `multicols` che bilancia le colonne, la pagina della nomenclatura viene spedita
+**dopo** che TeX ha letto riga 98 — e tutte le scritture in coda espandono un `\thepage` ormai
+vuoto. Dal log: `[6] (./Sections/Nomenclature.tex) … [7]`, poi `[8]` per la bibliografia.
+
+Misurato invece che argomentato, tre compilazioni cambiando solo quella riga:
+
+| riga 98 | voci con pagina nel `.nlo` | `makeindex` |
+|---|---|---|
+| `\renewcommand{\thepage}{}` | 0 / 92 | 0 accepted, 92 rejected |
+| commentata | 92 / 92 | ok |
+| `\pagestyle{empty}` | 92 / 92 — tutte `VII` | ok |
+
+`VII` è la pagina della nomenclatura stessa: col fix il numero registrato è quello giusto. Tommy ha
+applicato la terza riga.
+
+**Coda**: restavano `90 accepted, 2 rejected`. Due voci usano un `|` letterale nella descrizione, e
+`|` è il carattere con cui `makeindex` separa la voce dal comando di formattazione: `Extra '|'`, e
+scarta la riga intera. Sparivano `$\lambda$` e `$c$` senza che niente lo dicesse — di nuovo la
+stessa forma. Con `\textbar{}` fuori dalla matematica e `\mid` dentro: **92/92, 0 rejected**.
+Segnalato a Tommy; è nel suo sorgente, non nel nostro.
+
+### Verificato
+
+- Ricostruita l'immagine e attraversata **dall'immagine**, non dal dev — l'abitudine presa al giro
+  22. Compilazione end-to-end tramite `/api/compile` reale, poi letto ciò che il server ha salvato:
+  `build.json` con `engine: "pdflatex"`, `build.pdf` da **1.504.459 byte** (erano 1.283.785 senza i
+  loghi), nel `build.log` i `-eps-converted-to.pdf` e `90 entries accepted`.
+- **19 secondi** a freddo, dentro i 60s di `COMPILE_TIMEOUT_MS`: era il dubbio con Ghostscript in
+  mezzo, ed è rientrato.
+- Bibliografia: `.bbl` da 1375 righe, **zero citazioni indefinite all'ultimo passaggio** (contate
+  sull'ultima run, non sulla prima — le prime sono normali e non dicono niente).
+- File tree verificato sull'albero vero: quattro cartelle `▸`, e dopo un reload completo solo gli
+  antenati del file ripristinato aperti.
+- README riallineato: default del motore, pacchetti dell'immagine, shell-escape ristretto e
+  `latexmkrc`. Dopo il giro del 26/08 il README non può tornare a dire cose false.
+
+**Non verificato, e va detto**: il PDF non l'ho visto renderizzare in pagina. Il pannello browser
+usato per il check è rimasto nascosto, e in una scheda nascosta Chrome congela
+`requestAnimationFrame` — che è come PDF.js avanza il rendering; misurato direttamente, rAF non
+scattava e `page.render()` non poteva risolversi. Non è un difetto dell'app (in primo piano le
+stesse 50 pagine si rasterizzano in 807 ms), ma è una cosa che ha **controllato Tommy**, non io.
+
+### Cosa resta
+
+- **Non è live**: con questo i giri che aspettano il redeploy diventano **cinque** — 19, 20, 21, 22
+  e questo. Ed è il primo della lista che cambia il `Dockerfile`: il redeploy va fatto con rebuild,
+  non solo `git pull` (`redeploy.sh` fa già entrambe le cose).
+- **La scelta del motore non è ricordata** fra un reload e l'altro. Deciso di non farlo oggi: dove
+  vada salvata — nel `meta.json` del progetto (è una proprietà del documento, e la vedrebbero anche
+  i collaboratori) o in `localStorage` (più semplice, ma vale solo per un browser) — è una scelta di
+  prodotto, non una svista. La prima è quella che assomiglia a Overleaf.
+- **Le due voci col `|`** in `Sections/Nomenclature.tex`: in mano a Tommy.
+- Resta aperto, da agosto e più importante di tutto questo, il **backup del volume sul server**.
+
+---
+
 ## 2026-08-26 — Il README era indietro di due milestone ✅ (riletto, ok di Tommy)
 
 Giro di sola prosa, nato da una segnalazione della chat "normale" di Claude che stava leggendo il
