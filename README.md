@@ -125,7 +125,10 @@ docker compose -f docker-compose.dev.yml up           # subsequent runs
   is pdfLaTeX** — the same default Overleaf uses, and the one the documents people
   import were written against. Pick XeLaTeX for a document that needs system fonts
   (`fontspec`) or heavy Unicode; note it disables pdfTeX-only packages such as
-  `transparent`. The choice is **not remembered** between reloads yet.
+  `transparent`. The choice is **saved on the project** (`engine` in its
+  `meta.json`), not in your browser: it's a property of the document, so whoever
+  opens the project compiles it the same way. Projects created before the field
+  existed read as pdfLaTeX.
 - **Working together (topbar).** Avatars show who else is in the project, with
   colored cursors and selections in the editor and a live connection state. Text
   **saves itself continuously** — there is no Save button and nothing to press.
@@ -226,10 +229,11 @@ is still meant for a trusted group.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/projects` | List projects |
-| `GET` | `/api/projects/:id` | Load a project's file tree |
+| `GET` | `/api/projects/:id` | Load a project's file tree and its LaTeX engine |
 | `POST` | `/api/projects/upload` | Create a project from an uploaded `.zip` |
 | `PUT` | `/api/projects/:id` | Replace a project's whole file set (see the caveat above) |
 | `DELETE` | `/api/projects/:id` | Delete a project |
+| `POST` | `/api/projects/:id/engine` | Set the project's LaTeX engine (`pdflatex`\|`xelatex`\|`lualatex`) |
 | `POST` | `/api/compile` | Compile the supplied files, return PDF + log |
 
 This is a subset — the server also exposes auth/session, history, tags,

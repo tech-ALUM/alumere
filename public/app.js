@@ -99,6 +99,29 @@ const logEl = $("log"), logWrap = $("logWrap"), issuesEl = $("issues");
 const pdfScroll = $("pdfScroll"), pdfSizer = $("pdfSizer"), pagesEl = $("pdfPages");
 const previewBody = document.querySelector(".preview-body");
 const engineSel = $("engine");
+// The engine belongs to the PROJECT, not to me: it comes back with the project and every
+// change is written to its meta.json, so a colleague opening the same thesis compiles it the
+// same way I do. (The editor theme and font size right below stay in localStorage — those
+// really are preferences of the reader.) A failed save is reported and the selector rolls
+// back: leaving it showing a choice the server never took would be worse than not offering
+// it, because the next compile would quietly disagree with the label.
+function initEngine(engine) {
+  if (engine) engineSel.value = engine;
+  let saved = engineSel.value;
+  engineSel.addEventListener("change", async () => {
+    const want = engineSel.value;
+    try {
+      const r = await fetch(`/api/projects/${PROJECT_ID}/engine`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engine: want }),
+      });
+      if (!(await r.json()).ok) throw new Error("refused");
+      saved = want;
+    } catch {
+      engineSel.value = saved;
+      alert("Couldn't save the engine for this project — it stays on " + saved + ".");
+    }
+  });
+}
 
 let currentPath = null;            // path of the open file (null = nothing open)
 let openTabs = [];                 // client-only: paths open as tabs, left→right order
@@ -3824,6 +3847,7 @@ async function init() {
   try { const d = await (await fetch(`/api/projects/${PROJECT_ID}`)).json(); if (!d.ok) throw 0; meta = d.project; }
   catch { document.body.innerHTML = errorScreen("Project not found or server unreachable."); return; }
   setProjName(meta.name || "Project");
+  initEngine(meta.engine);
   initEditorTheme();
   initEditorFontSize();
 

@@ -80,6 +80,13 @@ app.use((req, _res, next) => { req.user = verifySession(parseCookies(req)[COOKIE
 // loads, gives up with a warning, and the document dies pages later on an undefined
 // command. Documents that really need XeLaTeX (fontspec, CJK) pick it in the selector.
 const ENGINE_FLAG = { pdflatex: "-pdf", xelatex: "-xelatex", lualatex: "-lualatex" };
+const DEFAULT_ENGINE = "pdflatex";
+// Which engine a project compiles with. It lives in meta.json because it's a property of the
+// DOCUMENT, not of the reader: a thesis written against pdfLaTeX needs pdfLaTeX for whoever
+// opens it, on whatever machine — the same reason Overleaf keeps it in the project settings
+// and not in a browser preference. Projects created before this field default to pdfLaTeX,
+// which is what they were already being compiled with.
+const engineOf = (meta) => (meta && ENGINE_FLAG[meta.engine] ? meta.engine : DEFAULT_ENGINE);
 const COMPILE_TIMEOUT_MS = 60_000;
 
 // ---------- helpers ----------
@@ -686,7 +693,7 @@ app.get("/api/projects/:id", requireUser, async (req, res) => {
   if (!meta) return res.status(404).json({ ok: false, error: "not found" });
   try {
     const root = await buildTree(filesDir(id));
-    res.json({ ok: true, project: { id, name: meta.name, root } });
+    res.json({ ok: true, project: { id, name: meta.name, engine: engineOf(meta), root } });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -726,6 +733,24 @@ app.post("/api/projects/:id/rename", requireUser, async (req, res) => {
     meta.name = name;
     await writeMeta(id, meta);
     res.json({ ok: true, name });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// The project's LaTeX engine. Deliberately NOT touching updatedAt/updatedBy: picking an
+// engine is a setting, not an edit, and the library's "last modified" column is supposed to
+// answer "when did someone last write in it" — the same trap as the phantom activity the
+// re-materialised files used to produce.
+app.post("/api/projects/:id/engine", requireUser, async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
+  const meta = await readMeta(id);
+  if (!meta) return res.status(404).json({ ok: false, error: "not found" });
+  const engine = String((req.body || {}).engine || "");
+  if (!ENGINE_FLAG[engine]) return res.status(400).json({ ok: false, error: `unknown engine "${engine}"` });
+  try {
+    meta.engine = engine;
+    await writeMeta(id, meta);
+    res.json({ ok: true, engine });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -897,7 +922,8 @@ function pickMainTex(files) {
 app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
   const { id } = req.params;
   if (!validId(id)) return res.status(400).json({ ok: false, error: "bad id" });
-  if (!(await readMeta(id))) return res.status(404).json({ ok: false, error: "not found" });
+  const projMeta = await readMeta(id);
+  if (!projMeta) return res.status(404).json({ ok: false, error: "not found" });
   let dir;
   try {
     const files = await readFilesFlat(filesDir(id));
@@ -912,7 +938,9 @@ app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
       if (f.encoding === "base64") await writeFile(dest, Buffer.from(f.content || "", "base64"));
       else await writeFile(dest, f.content ?? "", "utf8");
     }
-    const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG.pdflatex);
+    // The project's own engine, not a fixed one: this download has to produce the same PDF
+    // the editor does, and a document that needs XeLaTeX would otherwise fail only here.
+    const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG[engineOf(projMeta)]);
     const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
     if (!existsSync(pdfPath)) return res.status(422).json({ ok: false, error: "Compilation failed — open the project in the editor for details.", code });
     res.type("application/pdf").send(await readFile(pdfPath));
@@ -1274,9 +1302,15 @@ function runLatexmk(cwd, mainFile, engineFlag) {
 }
 
 app.post("/api/compile", requireUser, async (req, res) => {
-  const { files, main = "main.tex", engine = "pdflatex", projectId } = req.body || {};
+  const { files, main = "main.tex", engine, projectId } = req.body || {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ ok: false, log: "No files were sent to compile." });
-  const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.pdflatex;
+  // The client sends the selector's value, which it seeded from the project — but it stays
+  // authoritative, so a compile fired right after switching engine uses the new one without
+  // waiting for the save to land. Only an absent or bogus value falls back to the project's
+  // stored engine, and the global default is the last resort (a compile with no projectId).
+  const stored = projectId && validId(projectId) ? engineOf(await readMeta(projectId)) : DEFAULT_ENGINE;
+  const usedEngine = ENGINE_FLAG[engine] ? engine : stored;
+  const engineFlag = ENGINE_FLAG[usedEngine];
   let dir;
   try {
     dir = await mkdtemp(path.join(os.tmpdir(), "alumere-"));
@@ -1298,7 +1332,9 @@ app.post("/api/compile", requireUser, async (req, res) => {
       const syncPath = path.join(dir, mainRel.replace(/\.tex$/i, ".synctex.gz"));
       const synctexBuf = existsSync(syncPath) ? await readFile(syncPath) : null;
       const synctex = synctexBuf ? synctexBuf.toString("base64") : null;
-      await saveLastBuild(projectId, { pdf, synctexBuf, engine, synctexRoot: dir, by: briefUser(req.user), log });
+      // The engine actually used, never the raw request field: it can be absent, and a build
+      // that records `undefined` would tell the next reader nothing about how it was made.
+      await saveLastBuild(projectId, { pdf, synctexBuf, engine: usedEngine, synctexRoot: dir, by: briefUser(req.user), log });
       return res.json({ ok: true, log, pdf: pdf.toString("base64"), synctex, synctexRoot: dir });
     }
     return res.json({ ok: false, log: log || "No PDF was produced. Check the log for LaTeX errors.", code });
