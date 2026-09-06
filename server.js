@@ -74,6 +74,11 @@ app.use(express.static(path.join(__dirname, "public")));
 // Identify the caller from the signed session cookie (req.user is null if not signed in).
 app.use((req, _res, next) => { req.user = verifySession(parseCookies(req)[COOKIE_NAME]); next(); });
 
+// The default is pdfLaTeX — same as Overleaf's, and the same one the documents people
+// import were written against. XeLaTeX (the old default) reads Unicode and system fonts
+// better, but it silently disables pdfTeX-only packages like `transparent`: the package
+// loads, gives up with a warning, and the document dies pages later on an undefined
+// command. Documents that really need XeLaTeX (fontspec, CJK) pick it in the selector.
 const ENGINE_FLAG = { pdflatex: "-pdf", xelatex: "-xelatex", lualatex: "-lualatex" };
 const COMPILE_TIMEOUT_MS = 60_000;
 
@@ -907,7 +912,7 @@ app.get("/api/projects/:id/pdf", requireUser, async (req, res) => {
       if (f.encoding === "base64") await writeFile(dest, Buffer.from(f.content || "", "base64"));
       else await writeFile(dest, f.content ?? "", "utf8");
     }
-    const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG.xelatex);
+    const { code } = await runLatexmk(dir, mainRel, ENGINE_FLAG.pdflatex);
     const pdfPath = path.join(dir, mainRel.replace(/\.tex$/i, ".pdf"));
     if (!existsSync(pdfPath)) return res.status(422).json({ ok: false, error: "Compilation failed — open the project in the editor for details.", code });
     res.type("application/pdf").send(await readFile(pdfPath));
@@ -1240,9 +1245,23 @@ app.get("/api/projects/:id/build", requireUser, async (req, res) => {
   } catch { res.status(404).json({ ok: false, error: "no build yet" }); }
 });
 
+// Extra latexmk rules that ship with the image (nomencl's .nlo → .nls, which latexmk has no
+// built-in rule for). Absent when the server runs outside Docker — then latexmk just doesn't
+// get the rule, rather than refusing to start on a -r that points at nothing.
+const LATEXMKRC = "/opt/alumere/latexmkrc";
+const latexmkRcArgs = existsSync(LATEXMKRC) ? ["-r", LATEXMKRC] : [];
+
 function runLatexmk(cwd, mainFile, engineFlag) {
   return new Promise((resolve) => {
-    const args = [engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-synctex=1", "-no-shell-escape", mainFile];
+    // No -no-shell-escape: that flag switched off TeX Live's RESTRICTED shell escape too,
+    // and restricted is what converts an .eps (via repstopdf) and runs makeindex. Restricted
+    // mode is not "shell escape on" — texmf.cnf's shell_escape=p limits it to a fixed
+    // whitelist (bibtex, kpsewhich, makeindex, repstopdf, …); \write18 of an arbitrary
+    // command is still refused. It is the same setting Overleaf compiles under. The cost is
+    // that a hostile .eps now reaches Ghostscript (run with -dSAFER, inside the container,
+    // under COMPILE_TIMEOUT_MS) — a real surface, and the reason this is a deliberate line
+    // rather than a deleted flag. Full shell escape (-shell-escape) stays off.
+    const args = [...latexmkRcArgs, engineFlag, "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-synctex=1", mainFile];
     const child = spawn("latexmk", args, { cwd });
     let log = "";
     const onData = (d) => (log += d.toString());
@@ -1255,9 +1274,9 @@ function runLatexmk(cwd, mainFile, engineFlag) {
 }
 
 app.post("/api/compile", requireUser, async (req, res) => {
-  const { files, main = "main.tex", engine = "xelatex", projectId } = req.body || {};
+  const { files, main = "main.tex", engine = "pdflatex", projectId } = req.body || {};
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ ok: false, log: "No files were sent to compile." });
-  const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.xelatex;
+  const engineFlag = ENGINE_FLAG[engine] || ENGINE_FLAG.pdflatex;
   let dir;
   try {
     dir = await mkdtemp(path.join(os.tmpdir(), "alumere-"));

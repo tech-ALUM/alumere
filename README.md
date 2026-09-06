@@ -122,7 +122,10 @@ docker compose -f docker-compose.dev.yml up           # subsequent runs
   Switch to the **Log** tab to see compiler output; errors are highlighted.
   **Download PDF** saves the result.
 - **Engine selector.** Choose pdfLaTeX, XeLaTeX or LuaLaTeX. **The default engine
-  is XeLaTeX** (good Unicode and system-font support out of the box).
+  is pdfLaTeX** — the same default Overleaf uses, and the one the documents people
+  import were written against. Pick XeLaTeX for a document that needs system fonts
+  (`fontspec`) or heavy Unicode; note it disables pdfTeX-only packages such as
+  `transparent`. The choice is **not remembered** between reloads yet.
 - **Working together (topbar).** Avatars show who else is in the project, with
   colored cursors and selections in the editor and a live connection state. Text
   **saves itself continuously** — there is no Save button and nothing to press.
@@ -149,7 +152,19 @@ The compile runs against the TeX distribution available to the server:
 
 - **Docker image (default):** a curated TeX Live subset
   (`texlive-latex-recommended`, `-latex-extra`, `-fonts-recommended`,
-  `-science`, plus XeTeX/LuaTeX). This covers the large majority of documents.
+  `-science`, `-bibtex-extra`, `-plain-generic`, `-font-utils`, plus
+  XeTeX/LuaTeX, `biber` and Ghostscript). This covers the large majority of
+  documents — but "curated" means holes: a document that imports fine from
+  Overleaf can still stop on a missing `.sty`. The fix is one line in the
+  `Dockerfile` and a rebuild.
+- **Shell escape.** Compiles run under TeX Live's **restricted** shell escape —
+  the whitelist in `texmf.cnf` (`bibtex`, `kpsewhich`, `makeindex`, `repstopdf`,
+  …), not `-shell-escape`. That is what converts `.eps` figures and what lets
+  `latexmk` build a nomenclature. It also means a hostile `.eps` reaches
+  Ghostscript, which runs `-dSAFER`, in the container, under the compile timeout.
+- **`latexmk` extras.** The image ships `/opt/alumere/latexmkrc` with the
+  `nomencl` rule (`.nlo` → `.nls`), which `latexmk` has no built-in dependency
+  for. The server passes it with `-r` when the file exists.
 - **Need everything?** Replace those packages in the `Dockerfile` with
   `texlive-full` (much larger image, every CTAN package).
 - **Leaner alternative — Tectonic.** Tectonic is a modern, self-contained engine
