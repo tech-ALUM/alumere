@@ -7,6 +7,78 @@
 
 ---
 
+## 2026-09-06 (bis) — Giro 24: il motore è una proprietà del documento, non del lettore ✅ (check di Tommy OK)
+
+Coda immediata del giro 23, che lasciava aperta la domanda «dove salviamo il motore». Tommy ha
+scelto: **nel `meta.json` del progetto**, non in `localStorage`.
+
+### Perché è la scelta giusta e non solo la più laboriosa
+
+`localStorage` sarebbe stato metà del codice e zero modifiche al server. Ma avrebbe risposto alla
+domanda sbagliata. Che una tesi vada compilata con pdfLaTeX **non è una preferenza di chi la legge**:
+è un fatto del documento, vero su qualunque macchina e per chiunque la apra. Con la scelta nel
+browser, un collega che apre la stessa tesi ricade sul default e vede l'`Emergency stop` del giro 23
+— lo stesso guasto, riaperto da un altro. È anche il motivo per cui Overleaf la tiene nelle
+impostazioni del progetto.
+
+La riga di confine è netta e sta scritta accanto al codice (`app.js:102`, sopra `initEngine` a `app.js:108`): **motore → progetto**;
+**tema dell'editor e corpo del carattere → `localStorage`**, perché quelli sì sono di chi legge.
+
+### Cosa è stato toccato
+
+- `engineOf(meta)` (`server.js:89`) è l'unico punto che decide il motore di un progetto, ed è
+  tollerante per costruzione: campo assente o valore ignoto → `pdflatex`. I progetti nati prima del
+  campo leggono come pdfLaTeX, che è già ciò con cui venivano compilati — nessuna migrazione.
+- `GET /api/projects/:id` restituisce `engine` insieme a nome e albero.
+- `POST /api/projects/:id/engine`, modellato su `/rename`. Valida contro le chiavi di `ENGINE_FLAG`
+  e **non tocca `updatedAt`/`updatedBy`**: scegliere un motore è un'impostazione, non una scrittura,
+  e la colonna "last modified" della home deve continuare a rispondere a «quand'è che qualcuno ci ha
+  scritto dentro». È la stessa trappola dell'attività fantasma del 18 luglio.
+- `GET /api/projects/:id/pdf` (lo *Scarica PDF* dall'archivio) usa ora il motore del progetto. Era
+  cablato — prima a xelatex, poi a pdflatex nel giro 23 — e in entrambi i casi avrebbe prodotto un
+  download **diverso** da quello dell'editor per un documento che chiede l'altro motore.
+- `POST /api/compile`: il client resta autoritativo, così una compilazione lanciata subito dopo aver
+  cambiato motore usa già quello nuovo senza aspettare che il salvataggio atterri. Solo un valore
+  assente o non valido ricade sul motore del progetto, e il default globale è l'ultima spiaggia (una
+  compilazione senza `projectId`). Il `build.json` registra il motore **effettivamente usato**, mai
+  il campo grezzo della richiesta: prima poteva finirci `undefined`, e un build che non sa dire come
+  è stato fatto non serve a chi lo rilegge.
+- Client: `initEngine()` (`app.js:108`) semina il selettore dal progetto e salva a ogni `change`. Se
+  il salvataggio fallisce **il selettore torna indietro** e lo dice. Lasciarlo su una scelta che il
+  server non ha preso sarebbe peggio che non offrirla: l'etichetta direbbe una cosa e la
+  compilazione successiva ne farebbe un'altra — di nuovo la famiglia di guasti dei giri 21–23, dove
+  quello che si vede e quello che succede si separano in silenzio.
+
+### Verificato
+
+Giro completo dall'immagine ricostruita, sulla tesi vera:
+
+- all'apertura il selettore dice `pdflatex` con il campo **assente** dal `meta.json` (il fallback);
+- cambiato in XeLaTeX → `"engine": "xelatex"` sul disco, e `updatedAt` **fermo** a `20:42`;
+- ricaricata la pagina → il selettore torna `xelatex`. È il giro che prima non si chiudeva;
+- rimesso `pdflatex`, stato finale pulito.
+
+Validazione provata da sessione autenticata, non solo contro il muro di `requireUser`:
+`rm -rf /`, stringa vuota, `PDFLATEX` (maiuscolo) e `tectonic` → **400 tutti e quattro**, `meta.json`
+invariato. Il valore non raggiunge mai una shell (è una chiave in `ENGINE_FLAG`), ma viene respinto
+comunque invece di essere ignorato.
+
+Fallback del compile provati sul serio: richiesta **senza** il campo `engine` → PDF; richiesta con
+`engine: "tectonic"` → PDF. Nessuno dei due casi rompe, ed è il punto — il campo è diventato
+opzionale e i client vecchi continuano a funzionare.
+
+### Cosa resta
+
+- **Non è live**: i giri in attesa di redeploy restano **cinque** (19, 20, 21, 22, 23+24 insieme).
+- Il selettore mostra il motore del progetto ma **non c'è nulla che dica a un collega che l'hai
+  cambiato**: chi ha la stessa tesi già aperta continua col vecchio finché non ricarica. Non è nel
+  Y.Doc, è nel `meta.json`. Sopportabile — cambiarlo è raro e la compilazione è per-persona — ma è
+  una punta, e vale la pena averla scritta prima che la scopra qualcuno.
+- Restano aperti dal giro 23: le due voci col `|` in `Sections/Nomenclature.tex` (di Tommy) e,
+  da agosto e più importante di tutto, il **backup del volume sul server**.
+
+---
+
 ## 2026-09-06 — Giro 23: la prima tesi vera, e cinque modi di fallire senza dirlo ✅ (check di Tommy OK)
 
 Tommy ha caricato lo zip di una tesi vera del PoliMi — 50 pagine, 46 pacchetti, bibliografia,
@@ -174,10 +246,8 @@ stesse 50 pagine si rasterizzano in 807 ms), ma è una cosa che ha **controllato
 - **Non è live**: con questo i giri che aspettano il redeploy diventano **cinque** — 19, 20, 21, 22
   e questo. Ed è il primo della lista che cambia il `Dockerfile`: il redeploy va fatto con rebuild,
   non solo `git pull` (`redeploy.sh` fa già entrambe le cose).
-- **La scelta del motore non è ricordata** fra un reload e l'altro. Deciso di non farlo oggi: dove
-  vada salvata — nel `meta.json` del progetto (è una proprietà del documento, e la vedrebbero anche
-  i collaboratori) o in `localStorage` (più semplice, ma vale solo per un browser) — è una scelta di
-  prodotto, non una svista. La prima è quella che assomiglia a Overleaf.
+- ~~**La scelta del motore non è ricordata** fra un reload e l'altro.~~ **Chiuso il 06/09 dal giro
+  24**: Tommy ha scelto il `meta.json` del progetto, cioè la via che assomiglia a Overleaf.
 - **Le due voci col `|`** in `Sections/Nomenclature.tex`: in mano a Tommy.
 - Resta aperto, da agosto e più importante di tutto questo, il **backup del volume sul server**.
 
