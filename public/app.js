@@ -104,7 +104,17 @@ let currentPath = null;            // path of the open file (null = nothing open
 let openTabs = [];                 // client-only: paths open as tabs, left→right order
 let view = null;                   // the live CodeMirror EditorView
 let targetDir = "";                // folder new files/folders go into (from last click)
-const collapsed = new Set();       // folder paths the user has collapsed (local-only UI)
+// Folders start CLOSED: a project imported from Overleaf can arrive with a dozen nested
+// folders, and expanding them all buries the root files (Thesis.tex, the .bib) under a wall
+// of rows. So this is the set of folders the user has explicitly OPENED — empty = all shut.
+// Local-only UI state, never shared and never persisted.
+const expanded = new Set();
+// The open file must be visible even if it sits three folders deep: opening one (a click, a
+// restored tab, a jump to a colleague) opens its ancestors, not the whole tree.
+function revealInTree(path) {
+  const parts = String(path || "").split("/");
+  for (let i = 1; i < parts.length; i++) expanded.add(parts.slice(0, i).join("/"));
+}
 const pendingFolders = new Set();  // empty folders created locally (not shared until they hold a file)
 
 // ---------- Editor colour palettes ----------
@@ -287,7 +297,7 @@ function buildList(list) {
   for (const node of list) {
     const li = document.createElement("li");
     const row = document.createElement("div");
-    const openFolder = node.type === "folder" && !collapsed.has(node.path);
+    const openFolder = node.type === "folder" && expanded.has(node.path);
     row.className = "row" + (node.type === "file" && node.path === currentPath ? " active" : "");
     const tw = document.createElement("span");
     tw.className = "twisty";
@@ -322,7 +332,7 @@ function buildList(list) {
     row.addEventListener("click", (e) => {
       if (e.target === renameBtn || e.target === delBtn) return;
       if (node.type === "folder") {
-        if (collapsed.has(node.path)) collapsed.delete(node.path); else collapsed.add(node.path);
+        if (expanded.has(node.path)) expanded.delete(node.path); else expanded.add(node.path);
         targetDir = node.path; renderTree();
       } else { targetDir = parentOf(node.path); openFile(node.path); }
     });
@@ -369,7 +379,8 @@ function newFolder() {
   const clean = name.trim().replace(/^\/+|\/+$/g, "");
   if (!clean) return;
   const path = targetDir ? `${targetDir}/${clean}` : clean;
-  pendingFolders.add(path); collapsed.delete(path); targetDir = path;
+  // A folder you just made opens itself (and its ancestors): you made it to put something in it.
+  pendingFolders.add(path); revealInTree(path); expanded.add(path); targetDir = path;
   renderTree();
 }
 // Move an entry to a new path (Y.Text content is copied into a fresh Y.Text — rename
@@ -400,7 +411,11 @@ function renameNode(node) {
     }
     ydoc.transact(() => { for (const [p, v] of affected) moveEntry(p, newPath + p.slice(node.path.length), v); });
     if (pendingFolders.delete(node.path)) pendingFolders.add(newPath);
-    if (collapsed.delete(node.path)) collapsed.add(newPath);
+    // Carry the open/closed state across the rename — the folder AND every open one inside it,
+    // or the subfolders you had opened would silently shut when their parent changes name.
+    for (const p of [...expanded]) {
+      if (p === node.path || p.startsWith(prefix)) { expanded.delete(p); expanded.add(newPath + p.slice(node.path.length)); }
+    }
     setUpdatedBy();
     if (reopen) openFile(reopen); else renderTree();
   } else {
@@ -422,7 +437,7 @@ function deleteNode(node) {
     const affected = fileEntries().filter(([p]) => p === node.path || p.startsWith(prefix));
     ydoc.transact(() => { for (const [p] of affected) filesMap.delete(p); });
     for (const p of [...pendingFolders]) if (p === node.path || p.startsWith(prefix)) pendingFolders.delete(p);
-    collapsed.delete(node.path);
+    for (const p of [...expanded]) if (p === node.path || p.startsWith(prefix)) expanded.delete(p);
   } else {
     ydoc.transact(() => { filesMap.delete(node.path); });
   }
@@ -767,6 +782,7 @@ function openFile(path) {
   revealEditor();                    // opening a file while the editor pane is collapsed
   const val = filesMap.get(path);
   currentPath = path;
+  revealInTree(path);                // folders are closed by default — show where this file lives
   if (!openTabs.includes(path)) openTabs.push(path);
   updateEditorEmpty();               // un-hide the host before CM measures it
   if (view) { view.destroy(); view = null; }
